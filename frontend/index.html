@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IPD Visualizer</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="panel viewer-panel">
+        <div class="viewer-head">
+          <h2>Induced Dipoles</h2>
+          <div class="scale-control">
+            <label for="scaleSlider">Arrow scale</label>
+            <input
+              id="scaleSlider"
+              type="range"
+              min="0.1"
+              max="5"
+              step="0.1"
+              value="1"
+            />
+            <span id="scaleReadout" class="scale-readout">1.0&times;</span>
+          </div>
+        </div>
+
+        <div id="viewer"></div>
+
+        <div class="playback">
+          <div class="playback-controls">
+            <button id="prevBtn" type="button">Previous</button>
+            <button id="playBtn" type="button">Play</button>
+            <button id="nextBtn" type="button">Next</button>
+            <button id="restartBtn" type="button">Restart</button>
+          </div>
+          <span id="frameLabel" class="frame-label">No data loaded</span>
+        </div>
+
+        <div id="timeline" class="timeline"></div>
+      </section>
+
+      <section class="panel controls">
+        <h1>IPD Visualizer</h1>
+        <p class="subtitle">
+          Per-atom induced-dipole arrows over the IPD SCF iterations, on a fixed
+          geometry. Arrows begin at the atom centre; length is proportional to
+          &vert;&mu;&vert; using one global scale across every frame.
+        </p>
+
+        <label for="datasetSelect">Dataset</label>
+        <select id="datasetSelect"></select>
+
+        <label for="systemSelect">System</label>
+        <select id="systemSelect"></select>
+
+        <label for="separationSelect">Separation</label>
+        <select id="separationSelect"></select>
+
+        <label for="modelSelect">Dipole model</label>
+        <select id="modelSelect"></select>
+
+        <dl id="systemInfo" class="system-info"></dl>
+
+        <p id="status" class="status">Ready.</p>
+      </section>
+    </main>
+
+    <footer class="page-footer">
+      Coordinates in &#197;ngstr&ouml;m, induced dipoles in atomic units (e&middot;bohr).
+      Frame 0 is the SCF&rsquo;s direct-field seed, not zero.
+    </footer>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

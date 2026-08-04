@@ -1,0 +1,341 @@
+:root {
+  --bg: #f2efe8;
+  --panel: #fffdfa;
+  --ink: #1d2a2e;
+  --muted: #637174;
+  --accent: #2f6f6d;
+  --accent-strong: #1f4f4d;
+  --line: #ddd3c2;
+  --warn: #9f3f20;
+  --ok: #205f35;
+  --dipole: #bf00bf;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at top right, #f8f2e0, var(--bg) 55%);
+}
+
+.app-shell {
+  display: grid;
+  grid-template-areas:
+    "viewer"
+    "controls";
+  gap: 1rem;
+  padding: 1rem;
+}
+
+/* Selectors sit beside the viewer when there is room, and stack below it when there
+   is not. The breakpoint mirrors the one that shrinks #viewer. */
+@media (min-width: 1025px) {
+  .app-shell {
+    grid-template-areas: "viewer controls";
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    align-items: start;
+  }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(66, 62, 47, 0.08);
+  padding: 1rem;
+}
+
+.viewer-panel {
+  grid-area: viewer;
+}
+
+.controls {
+  grid-area: controls;
+}
+
+h1,
+h2 {
+  margin: 0 0 0.3rem;
+  font-family: "IBM Plex Serif", Georgia, serif;
+}
+
+.subtitle {
+  margin: 0 0 0.7rem;
+  color: var(--muted);
+}
+
+label {
+  display: block;
+  margin: 0.6rem 0 0.25rem;
+  font-weight: 600;
+}
+
+button {
+  border: none;
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:hover {
+  background: var(--accent-strong);
+}
+
+button:disabled {
+  background: var(--line);
+  color: var(--muted);
+  cursor: default;
+}
+
+select {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+select:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
+select:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* --- system information -------------------------------------------------- */
+
+.system-info {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.7rem;
+  margin: 1rem 0 0;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.system-info:empty {
+  display: none;
+}
+
+.system-info dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.system-info dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-info .system-group {
+  grid-column: 1 / -1;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.system-info .system-note {
+  grid-column: 1 / -1;
+  margin: 0.4rem 0 0;
+  text-align: left;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.status {
+  margin: 0.8rem 0 0;
+  font-weight: 600;
+}
+
+.status.error {
+  color: var(--warn);
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.page-footer {
+  margin: 0 1rem 1rem;
+  padding: 0.7rem 0.9rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fcf8ef;
+  font-size: 0.86rem;
+}
+
+/* --- viewer ------------------------------------------------------------- */
+
+.viewer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.55rem;
+}
+
+.scale-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.scale-control label {
+  margin: 0;
+}
+
+.scale-control input[type="range"] {
+  width: 180px;
+  accent-color: var(--accent);
+}
+
+.scale-readout {
+  min-width: 8.5rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+#viewer {
+  width: 100%;
+  min-height: 520px;
+  height: 56vh;
+  max-height: 720px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  contain: layout paint;
+}
+
+/* --- playback ----------------------------------------------------------- */
+
+.playback {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.7rem;
+}
+
+.playback-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.frame-label {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- timeline ----------------------------------------------------------- */
+
+.timeline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 0.7rem;
+  min-height: 1.6rem;
+}
+
+/* The connecting rule between dots. */
+.timeline-dot + .timeline-dot::before {
+  content: "";
+  display: block;
+  width: 0.85rem;
+  height: 2px;
+  background: var(--line);
+  margin-right: 0.15rem;
+}
+
+.timeline-dot {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.timeline-dot:hover,
+.timeline-dot:disabled {
+  background: none;
+}
+
+.timeline-dot::after {
+  content: "";
+  display: block;
+  width: 0.72rem;
+  height: 0.72rem;
+  margin-left: 0.15rem;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--panel);
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+
+.timeline-dot:hover::after {
+  background: var(--accent);
+  transform: scale(1.15);
+}
+
+.timeline-dot[aria-current="true"]::after {
+  background: var(--dipole);
+  border-color: var(--dipole);
+  transform: scale(1.3);
+}
+
+.timeline-dot:focus-visible {
+  outline: none;
+}
+
+.timeline-dot:focus-visible::after {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+/* Fallback for long histories: a native range input instead of a dot per frame. */
+.timeline-range {
+  width: 100%;
+  accent-color: var(--dipole);
+}
+
+@media (max-width: 1024px) {
+  #viewer {
+    min-height: 400px;
+    height: 50vh;
+  }
+
+  .viewer-head,
+  .scale-control,
+  .playback {
+    flex-wrap: wrap;
+  }
+}
