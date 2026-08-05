@@ -7,6 +7,7 @@
 const TABS = [
   { name: "visualize", tab: "tabVisualize", page: "pageVisualize" },
   { name: "compute", tab: "tabCompute", page: "pageCompute" },
+  { name: "plot", tab: "tabPlot", page: "pagePlot" },
 ];
 
 const entries = TABS.map((entry) => ({

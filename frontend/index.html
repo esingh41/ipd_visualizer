@@ -6,6 +6,7 @@
     <title>IPD Visualizer</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-basic-2.35.2.min.js" charset="utf-8"></script>
   </head>
   <body>
     <nav class="tab-bar" role="tablist" aria-label="Sections">
@@ -29,6 +30,17 @@
         tabindex="-1"
       >
         Compute IPD
+      </button>
+      <button
+        type="button"
+        class="tab"
+        role="tab"
+        id="tabPlot"
+        aria-controls="pagePlot"
+        aria-selected="false"
+        tabindex="-1"
+      >
+        Plot IPD
       </button>
     </nav>
 
@@ -189,6 +201,52 @@
           <p id="ipdStatus" class="status">No dataset loaded.</p>
         </section>
       </section>
+      <section
+        class="plot-shell page"
+        id="pagePlot"
+        role="tabpanel"
+        aria-labelledby="tabPlot"
+        hidden
+      >
+
+        <section class="panel plot-panel">
+          <h2>Potential energy curves</h2>
+          <div id="plotChart"></div>
+        </section>
+
+        <section class="panel controls">
+          <p class="subtitle">
+            The different IPD curves and SAPT levels of theory available. The s66x8 dataset has several levels of theory available. The cation water systems from NENCI2021 dataset only have SAPT2+ curves available.
+          </p>
+
+          <label for="plotDatasetSelect">Dataset</label>
+          <select id="plotDatasetSelect"></select>
+
+          <label for="plotSystemSelect">System</label>
+          <select id="plotSystemSelect"></select>
+
+          <fieldset id="plotCurveList" class="plot-curve-list">
+            <legend>Curves</legend>
+            <!-- HTML declares where content goes JS decides what goes there. -->
+          </fieldset>
+
+          <p id="plotStatus" class="status">Ready.</p>
+        </section>
+
+        <!-- A <footer> inside a sectioning element is that section's footer, so this note
+             stays with the plot instead of appearing under the other tabs. -->
+        <footer class="page-footer plot-note">
+          <strong>IPD curves</strong> are this app&rsquo;s induced-dipole induction
+          energies, one per damping scheme. <em>Universal</em> applies a single Thole
+          parameter to every atom; the <em>radius</em> variants scale damping by
+          TS&hairsp;/&hairsp;MBIS atomic radii, and differ in whether damping is applied
+          within a monomer (intra), between monomers (inter), or both. The
+          <strong>SAPT reference</strong> curves are the SAPT0 induction decomposition
+          those models are trying to reproduce &mdash; drawn solid for the total and
+          dashed for its three components, which sum to it exactly.
+        </footer>
+      </section>
+
     </main>
 
     <footer class="page-footer">
@@ -199,5 +257,6 @@
     <script type="module" src="/main.js"></script>
     <script type="module" src="/tabs.js"></script>
     <script type="module" src="/ipd_compute.js"></script>
+    <script type="module" src="/plot.js"></script>
   </body>
 </html>

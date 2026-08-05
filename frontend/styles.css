@@ -9,6 +9,28 @@
   --warn: #9f3f20;
   --ok: #205f35;
   --dipole: #bf00bf;
+
+  /* Curve colours for the plot tab, on two independent channels.
+
+     Colour = which SAPT energy component, following the conventional
+     decomposition scheme so the plot reads the way the literature does.
+     Dash   = total vs breakdown: a total is solid, its components are
+              dashed or dotted. Set in plot.js, since Plotly owns line style.
+
+     Only the induction family appears in the bundled data today; the other
+     three are here so an S66x8 import needs no new colours. */
+  --sapt-elst: #c0392b; /* electrostatics -- red   */
+  --sapt-exch: #2e7d32; /* exchange       -- green */
+  --sapt-ind: #1f5fa8; /* induction      -- blue  */
+  --sapt-disp: #c99700; /* dispersion     -- yellow */
+
+  /* The IPD model curves are this app's own predictions, not SAPT reference
+     values, so they get a family of their own rather than a shade of blue --
+     the comparison is only readable if the two are never confusable. */
+  --ipd-1: #3d1a5c;
+  --ipd-2: #6b2f96;
+  --ipd-3: #9a55c4;
+  --ipd-4: #bf00bf;
 }
 
 * {
@@ -103,6 +125,134 @@ body {
   .compute-shell {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.plot-shell {
+  display: grid;
+  grid-template-areas:
+    "chart"
+    "controls";
+  gap: 1rem;
+  padding: 1rem;
+}
+
+@media (min-width: 1025px) {
+  .plot-shell {
+    grid-template-areas: "chart controls";
+    grid-template-columns: minmax(0, 1fr) 21rem;
+    align-items: start;
+  }
+}
+
+.plot-panel {
+  grid-area: chart;
+}
+
+/* An empty div is zero pixels tall, and Plotly sizes itself to its container --
+   so without an explicit height the chart renders invisibly. */
+#plotChart {
+  width: 100%;
+  min-height: 26rem;
+  height: 50vh;
+  max-height: 640px;
+}
+
+/* --- curve selector ------------------------------------------------------- */
+
+/* A fieldset ships with a border, margin and padding no other element has.
+   Reset them, then style it like the rest of the sidebar. */
+.plot-curve-list {
+  border: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.plot-curve-list legend {
+  padding: 0;
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Group heading within the list -- "IPD models" / "SAPT reference". */
+.plot-curve-group {
+  margin: 0.5rem 0 0.15rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.plot-curve-group:first-of-type {
+  margin-top: 0;
+}
+
+.plot-curve {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.plot-curve input {
+  accent-color: var(--accent);
+  flex: none;
+}
+
+/* Colour chip so each row reads as the curve it controls; plot.js sets the
+   background from the same series colour it hands Plotly. Components use a
+   dashed chip to mirror their dashed line -- a repeating-linear-gradient
+   rather than a border-style, so the dash reads at this size. */
+/* plot.js sets only `color` on the swatch; everything here derives from it, so
+   the chip can never drift out of step with the line Plotly draws. */
+.plot-curve-swatch {
+  flex: none;
+  width: 1.1rem;
+  height: 0.2rem;
+  border-radius: 999px;
+  color: var(--muted);
+  background-color: currentColor;
+}
+
+/* background-color must go transparent, or it fills the gaps the gradient
+   just cut and the dash renders solid. */
+.plot-curve-swatch[data-dash="dash"],
+.plot-curve-swatch[data-dash="dot"],
+.plot-curve-swatch[data-dash="dashdot"] {
+  border-radius: 0;
+  background-color: transparent;
+}
+
+.plot-curve-swatch[data-dash="dash"] {
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 4px,
+    transparent 4px 7px
+  );
+}
+
+.plot-curve-swatch[data-dash="dot"] {
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.plot-curve-swatch[data-dash="dashdot"] {
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 5px,
+    transparent 5px 8px,
+    currentColor 8px 10px,
+    transparent 10px 13px
+  );
 }
 
 .panel {
