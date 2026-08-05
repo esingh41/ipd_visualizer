@@ -38,7 +38,7 @@ let currentFrame = 0;
 let playTimer = null;
 let baseScale = 1.0; // DEFAULT_ARROW_LEN / max|mu|, one value for all frames, atoms and models
 
-function setStatus(message, kind = "") {
+export function setStatus(message, kind = "") {
   statusEl.textContent = message;
   statusEl.classList.remove("error", "ok");
   if (kind) {
@@ -46,11 +46,14 @@ function setStatus(message, kind = "") {
   }
 }
 
-async function callJson(url, method = "GET", body = null) {
+export async function callJson(url, method = "GET", body = null) {
+  // FormData carries its own multipart boundary, so the JSON content type must not be
+  // set for an upload -- doing so makes the server parse the body as JSON and find no file.
+  const isForm = body instanceof FormData;
   const res = await fetch(url, {
     method,
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : null,
+    headers: isForm ? {} : { "Content-Type": "application/json" },
+    body: isForm ? body : body ? JSON.stringify(body) : null,
   });
   const rawText = await res.text();
   let data = null;
@@ -61,7 +64,11 @@ async function callJson(url, method = "GET", body = null) {
   }
   if (!res.ok) {
     if (data && typeof data === "object") {
-      throw new Error(data.error || `Request failed: ${res.status}`);
+      // The structured fields (code, details, retryable) ride along on the Error so the
+      // IPD panel can render more than a sentence. Plain callers keep using .message.
+      const err = new Error(data.error || `Request failed: ${res.status}`);
+      err.payload = data;
+      throw err;
     }
     const fallback = rawText?.trim() || `Request failed: ${res.status}`;
     throw new Error(`Server error (${res.status}): ${fallback}`);
@@ -403,11 +410,16 @@ function updateSystemInfo() {
     reference_energies: referenceEnergies = [],
   } = currentSystem;
 
-  // A row is [term, value]; a lone string is a full-width group heading.
+  // A row is [term, value]; a lone string is a full-width group heading. The first three
+  // come from the catalog, so they are absent for an on-demand result and are dropped
+  // rather than rendered as "undefined".
   const rows = [
-    ["Dataset", dataset],
-    ["System", systemName],
-    ["Separation", separationLabel],
+    ...(dataset ? [["Dataset", dataset]] : []),
+    ...(systemName ? [["System", systemName]] : []),
+    ...(currentSystem.system_id && !systemName
+      ? [["Geometry", currentSystem.system_id]]
+      : []),
+    ...(separationLabel ? [["Separation", separationLabel]] : []),
     ...(separationAlt ? [["", separationAlt]] : []),
     ["Atoms", `${nAtoms}`],
     ...(nAtomsA ? [["Monomers", `${nAtomsA} + ${nAtoms - nAtomsA}`]] : []),
@@ -458,31 +470,54 @@ function updateSystemInfo() {
 
 // --- data loading ---------------------------------------------------------
 
-async function loadCatalog() {
-  setStatus("Loading system catalog…");
+// Re-reads the catalog and rebuilds the four selectors. Each one keeps its current choice
+// when that choice still exists, so refreshing after a calculation adds the new geometry
+// without moving the user's selection.
+export async function refreshCatalog() {
   catalog = await callJson("/api/ipd/systems");
-  if (catalog.length === 0) {
-    throw new Error("The system catalog is empty. Run scripts/build_ipd_dataset.py.");
-  }
   populateDatasetSelector();
   populateSystemSelector();
   populateSeparationSelector();
   populateModelSelector();
+  return catalog;
 }
 
-async function loadSelectedSystem() {
-  stopPlayback();
-
-  const systemId = resolveSelectedSystemId();
-  if (!systemId) {
-    return;
+// Points the cascade at one catalog entry and loads it. Used by the compute panel so a
+// freshly calculated geometry becomes the *selected* one rather than something the viewer
+// shows while the selectors still name a different system.
+export async function selectCatalogSystem(systemId, model = null) {
+  const entry = catalog.find((candidate) => candidate.system_id === systemId);
+  if (!entry) {
+    return false;
   }
+  // Each populate* reads the level above it, so the cascade has to be walked top-down:
+  // setting a value before its options exist would be discarded by the rebuild.
+  datasetEl.value = entry.dataset;
+  populateSystemSelector();
+  systemEl.value = entry.system_name;
+  populateSeparationSelector();
+  separationEl.value = systemId;
+  populateModelSelector();
+  if (model && [...modelEl.options].some((option) => option.value === model)) {
+    modelEl.value = model;
+  }
+  await loadSelectedSystem();
+  return true;
+}
 
-  setStatus("Loading system…");
-  const data = await callJson(
-    `/api/ipd/system?system_id=${encodeURIComponent(systemId)}` +
-      `&model=${encodeURIComponent(modelEl.value)}`,
-  );
+async function loadCatalog() {
+  setStatus("Loading system catalog…");
+  await refreshCatalog();
+  if (catalog.length === 0) {
+    throw new Error("The system catalog is empty. Run scripts/build_ipd_dataset.py.");
+  }
+}
+
+// Renders a history payload, whatever produced it: the bundled catalog or an on-demand
+// calculation. Both sources share this one path, so they share one camera policy, one
+// global arrow scale and one timeline -- there is no second way to display a history.
+export function showComputedSystem(data) {
+  stopPlayback();
 
   // Only a different geometry justifies touching the model or the camera. Changing the
   // dipole model alone leaves the nuclei -- and therefore the view -- exactly as they are.
@@ -525,12 +560,32 @@ async function loadSelectedSystem() {
   }
 
   updateSystemInfo();
+
+  // A computed payload carries no catalog metadata, so the caption falls back to the
+  // system id rather than printing "undefined undefined".
+  const name = [data.system_name, data.separation_label]
+    .filter(Boolean)
+    .join(" ") || data.system_id || "System";
   setStatus(
     data.n_frames === 1
-      ? `${data.system_name} ${data.separation_label}: converged dipoles, ${data.n_atoms} atoms`
-      : `${data.system_name} ${data.separation_label}: ${data.n_frames - 1} SCF iterations, ` +
-          `${data.n_atoms} atoms`,
+      ? `${name}: converged dipoles, ${data.n_atoms} atoms`
+      : `${name}: ${data.n_frames - 1} SCF iterations, ${data.n_atoms} atoms`,
     "ok",
+  );
+}
+
+async function loadSelectedSystem() {
+  const systemId = resolveSelectedSystemId();
+  if (!systemId) {
+    return;
+  }
+
+  setStatus("Loading system…");
+  showComputedSystem(
+    await callJson(
+      `/api/ipd/system?system_id=${encodeURIComponent(systemId)}` +
+        `&model=${encodeURIComponent(modelEl.value)}`,
+    ),
   );
 }
 
@@ -590,9 +645,41 @@ scaleSliderEl.addEventListener("input", () => {
   showFrame(currentFrame);
 });
 
-// Resize the canvas only -- re-rendering the model here would reset the camera.
-window.addEventListener("resize", () => {
+// --- viewer sizing --------------------------------------------------------
+
+// A WebGL canvas measures its container, and a container inside a hidden tab panel is
+// 0x0. Resizing to that collapses the canvas, and it stays collapsed after the panel is
+// shown again -- so every resize path has to check first.
+function isViewerLaidOut() {
+  const container = document.getElementById("viewer");
+  return (
+    Boolean(container) &&
+    !container.closest("[hidden]") &&
+    container.clientWidth > 0 &&
+    container.clientHeight > 0
+  );
+}
+
+// Safe to call from anywhere, including while the Visualize tab is hidden.
+export function resizeViewer() {
+  if (!isViewerLaidOut()) {
+    return;
+  }
   viewer.resize();
+  viewer.render();
+}
+
+// Resize the canvas only -- re-rendering the model here would reset the camera.
+window.addEventListener("resize", resizeViewer);
+
+// tabs.js announces the switch rather than calling in here, which keeps it free of any
+// dependency on this module. One animation frame so the revealed panel has been laid out
+// before 3Dmol measures it.
+document.addEventListener("app:tabchange", (event) => {
+  if (event.detail.name !== "visualize") {
+    return;
+  }
+  requestAnimationFrame(resizeViewer);
 });
 
 // The readout is not primed here: baseScale is only known once a system loads, and

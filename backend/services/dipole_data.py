@@ -45,6 +45,21 @@ MU_DECIMALS = 6
 # Name used for a file that predates the model axis and stores a bare ``mu_history``.
 LEGACY_MODEL = "history"
 
+# The SAPT induction benchmark for a geometry, shown as the reference the models are read
+# against. The last three sum to the first, so they are ordered total-first and kept
+# together. These describe the *geometry*, not a dipole model, which is why they are
+# displayed in their own group rather than mixed in with the per-model energies.
+#
+# Declared here rather than in scripts/build_ipd_dataset.py because both the offline
+# converter and the on-demand catalog need the same four column names, and a second copy
+# would eventually disagree with this one.
+SAPT_INDUCTION_ENERGIES = (
+    ("Induction total", "SAPT0 IND kcalmol"),
+    ("ind20,r", "SAPT ind20,r kcalmol"),
+    ("exch-ind20,r", "SAPT exch-ind20,r kcalmol"),
+    ("δHF", "SAPT dHF ind kcalmol"),
+)
+
 
 class SystemNotFound(LookupError):
     """Raised when a requested ``system_id`` is not in the catalog.

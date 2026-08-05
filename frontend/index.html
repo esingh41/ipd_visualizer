@@ -8,62 +8,186 @@
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
   </head>
   <body>
-    <main class="app-shell">
-      <section class="panel viewer-panel">
-        <div class="viewer-head">
-          <h2>Induced Dipoles</h2>
-          <div class="scale-control">
-            <label for="scaleSlider">Arrow scale</label>
-            <input
-              id="scaleSlider"
-              type="range"
-              min="0.1"
-              max="5"
-              step="0.1"
-              value="1"
-            />
-            <span id="scaleReadout" class="scale-readout">1.0&times;</span>
+    <nav class="tab-bar" role="tablist" aria-label="Sections">
+      <button
+        type="button"
+        class="tab"
+        role="tab"
+        id="tabVisualize"
+        aria-controls="pageVisualize"
+        aria-selected="true"
+      >
+        Visualize
+      </button>
+      <button
+        type="button"
+        class="tab"
+        role="tab"
+        id="tabCompute"
+        aria-controls="pageCompute"
+        aria-selected="false"
+        tabindex="-1"
+      >
+        Compute IPD
+      </button>
+    </nav>
+
+    <!-- One permanent <main>. Putting role="tabpanel" on it would override the implicit
+         landmark role and leave the page with no main landmark at all. -->
+    <main>
+      <section
+        class="app-shell page"
+        id="pageVisualize"
+        role="tabpanel"
+        aria-labelledby="tabVisualize"
+      >
+        <section class="panel viewer-panel">
+          <div class="viewer-head">
+            <h2>Induced Dipoles</h2>
+            <div class="scale-control">
+              <label for="scaleSlider">Arrow scale</label>
+              <input
+                id="scaleSlider"
+                type="range"
+                min="0.1"
+                max="5"
+                step="0.1"
+                value="1"
+              />
+              <span id="scaleReadout" class="scale-readout">1.0&times;</span>
+            </div>
           </div>
-        </div>
 
-        <div id="viewer"></div>
+          <div id="viewer"></div>
 
-        <div class="playback">
-          <div class="playback-controls">
-            <button id="prevBtn" type="button">Previous</button>
-            <button id="playBtn" type="button">Play</button>
-            <button id="nextBtn" type="button">Next</button>
-            <button id="restartBtn" type="button">Restart</button>
+          <div class="playback">
+            <div class="playback-controls">
+              <button id="prevBtn" type="button">Previous</button>
+              <button id="playBtn" type="button">Play</button>
+              <button id="nextBtn" type="button">Next</button>
+              <button id="restartBtn" type="button">Restart</button>
+            </div>
+            <span id="frameLabel" class="frame-label">No data loaded</span>
           </div>
-          <span id="frameLabel" class="frame-label">No data loaded</span>
-        </div>
 
-        <div id="timeline" class="timeline"></div>
+          <div id="timeline" class="timeline"></div>
+        </section>
+
+        <section class="panel controls">
+          <h1>IPD Visualizer</h1>
+          <p class="subtitle">
+            Per-atom induced-dipole arrows over the IPD SCF iterations, on a fixed
+            geometry. Arrows begin at the atom centre; length is proportional to
+            &vert;&mu;&vert; using one global scale across every frame.
+          </p>
+
+          <label for="datasetSelect">Dataset</label>
+          <select id="datasetSelect"></select>
+
+          <label for="systemSelect">System</label>
+          <select id="systemSelect"></select>
+
+          <label for="separationSelect">Separation</label>
+          <select id="separationSelect"></select>
+
+          <label for="modelSelect">Dipole model</label>
+          <select id="modelSelect"></select>
+
+          <dl id="systemInfo" class="system-info"></dl>
+
+          <p id="status" class="status">Ready.</p>
+        </section>
       </section>
 
-      <section class="panel controls">
-        <h1>IPD Visualizer</h1>
-        <p class="subtitle">
-          Per-atom induced-dipole arrows over the IPD SCF iterations, on a fixed
-          geometry. Arrows begin at the atom centre; length is proportional to
-          &vert;&mu;&vert; using one global scale across every frame.
-        </p>
+      <section
+        class="compute-shell page"
+        id="pageCompute"
+        role="tabpanel"
+        aria-labelledby="tabCompute"
+        hidden
+      >
+        <section class="panel">
+          <h2>Dataset</h2>
+          <p class="subtitle">
+            Upload a dimer dataframe carrying MBIS multipoles. Results are saved back
+            into a server-managed copy; your original file is never modified.
+          </p>
 
-        <label for="datasetSelect">Dataset</label>
-        <select id="datasetSelect"></select>
+          <span id="ipdBadge" class="status-badge">Checking server&hellip;</span>
+          <ul id="ipdDetails" class="ipd-details"></ul>
 
-        <label for="systemSelect">System</label>
-        <select id="systemSelect"></select>
+          <label for="ipdFile">Dataframe (.pkl)</label>
+          <input id="ipdFile" type="file" accept=".pkl,.pickle" />
 
-        <label for="separationSelect">Separation</label>
-        <select id="separationSelect"></select>
+          <label for="ipdDatasetSelect">Dataset</label>
+          <select id="ipdDatasetSelect"></select>
 
-        <label for="modelSelect">Dipole model</label>
-        <select id="modelSelect"></select>
+          <label for="ipdSystemSelect">System</label>
+          <select id="ipdSystemSelect" disabled></select>
 
-        <dl id="systemInfo" class="system-info"></dl>
+          <label for="ipdGeometrySelect">Geometry</label>
+          <select id="ipdGeometrySelect" disabled></select>
 
-        <p id="status" class="status">Ready.</p>
+          <div class="ipd-actions">
+            <button type="button" id="ipdExportBtn" class="ghost" disabled>
+              Download enriched dataset
+            </button>
+            <button type="button" id="ipdRestoreBtn" class="ghost" disabled>
+              Restore original
+            </button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Calculation</h2>
+          <p class="subtitle">
+            Each damping mode is stored in its own columns, and appears as a separate
+            dipole model in the visualizer.
+          </p>
+
+          <span class="segmented-label" id="ipdRadiusLabel">Radius damping</span>
+          <div
+            class="segmented"
+            id="ipdRadius"
+            role="radiogroup"
+            aria-labelledby="ipdRadiusLabel"
+          >
+            <button type="button" role="radio" data-radius="none" aria-checked="false">
+              None
+            </button>
+            <button type="button" role="radio" data-radius="intra" aria-checked="false">
+              Intra
+            </button>
+            <button type="button" role="radio" data-radius="inter" aria-checked="false">
+              Inter
+            </button>
+            <button type="button" role="radio" data-radius="both" aria-checked="true">
+              Both
+            </button>
+          </div>
+
+          <button type="button" id="ipdRunBtn" class="primary" disabled>Run IPD</button>
+          <button type="button" id="ipdRunGroupBtn" class="primary" disabled>
+            Run whole system
+          </button>
+
+          <div class="ipd-actions">
+            <button type="button" id="ipdRecomputeBtn" class="ghost" hidden>
+              Recompute geometry
+            </button>
+            <button type="button" id="ipdRecomputeGroupBtn" class="ghost" hidden>
+              Recompute system
+            </button>
+          </div>
+
+          <dl id="ipdResult" class="system-info"></dl>
+
+          <button type="button" id="ipdViewBtn" class="ghost" hidden>
+            View in visualizer
+          </button>
+
+          <p id="ipdStatus" class="status">No dataset loaded.</p>
+        </section>
       </section>
     </main>
 
@@ -73,5 +197,7 @@
     </footer>
 
     <script type="module" src="/main.js"></script>
+    <script type="module" src="/tabs.js"></script>
+    <script type="module" src="/ipd_compute.js"></script>
   </body>
 </html>
