@@ -6,6 +6,7 @@
 
 const TABS = [
   { name: "visualize", tab: "tabVisualize", page: "pageVisualize" },
+  { name: "trajectory", tab: "tabTrajectory", page: "pageTrajectory" },
   { name: "compute", tab: "tabCompute", page: "pageCompute" },
   { name: "plot", tab: "tabPlot", page: "pagePlot" },
 ];

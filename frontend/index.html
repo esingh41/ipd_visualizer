@@ -24,6 +24,17 @@
         type="button"
         class="tab"
         role="tab"
+        id="tabTrajectory"
+        aria-controls="pageTrajectory"
+        aria-selected="false"
+        tabindex="-1"
+      >
+        Trajectory
+      </button>
+      <button
+        type="button"
+        class="tab"
+        role="tab"
         id="tabCompute"
         aria-controls="pageCompute"
         aria-selected="false"
@@ -109,6 +120,78 @@
 
           <p id="status" class="status">Ready.</p>
         </section>
+      </section>
+
+      <section
+        class="traj-shell page"
+        id="pageTrajectory"
+        role="tabpanel"
+        aria-labelledby="tabTrajectory"
+        hidden
+      >
+        <section class="panel viewer-panel">
+          <div class="viewer-head">
+            <h2>Pulling the dimer apart</h2>
+            <div class="scale-control">
+              <label for="trajScaleSlider">Arrow scale</label>
+              <input
+                id="trajScaleSlider"
+                type="range"
+                min="0.1"
+                max="5"
+                step="0.1"
+                value="1"
+              />
+              <span id="trajScaleReadout" class="scale-readout">1.0&times;</span>
+            </div>
+          </div>
+
+          <div id="trajViewer"></div>
+
+          <div class="playback">
+            <div class="playback-controls">
+              <button id="trajPrevBtn" type="button" disabled>Previous</button>
+              <button id="trajPlayBtn" type="button" disabled>Play</button>
+              <button id="trajNextBtn" type="button" disabled>Next</button>
+              <button id="trajRestartBtn" type="button" disabled>Restart</button>
+            </div>
+            <span id="trajFrameLabel" class="frame-label">No trajectory loaded</span>
+          </div>
+
+          <div id="trajTimeline" class="timeline"></div>
+        </section>
+
+        <section class="panel controls">
+          <p class="subtitle">
+            Every geometry of one scan, played in separation order. Each frame is a
+            converged result &mdash; the arrows are the final induced dipoles at that
+            separation, on one scale across the whole trajectory, so a shrinking arrow
+            means a shrinking dipole.
+          </p>
+
+          <label for="trajDatasetSelect">Dataset</label>
+          <select id="trajDatasetSelect"></select>
+
+          <label for="trajSystemSelect">System</label>
+          <select id="trajSystemSelect"></select>
+
+          <label for="trajModelSelect">Dipole model</label>
+          <select id="trajModelSelect"></select>
+
+          <dl id="trajInfo" class="system-info"></dl>
+
+          <p id="trajStatus" class="status">Ready.</p>
+        </section>
+
+        <!-- A <footer> inside a sectioning element is that section's footer, so this note
+             stays with the trajectory instead of appearing under the other tabs. -->
+        <footer class="page-footer traj-note">
+          The separations are sampled unevenly &mdash; densely near contact, sparsely in
+          the tail &mdash; and each is played for the same length of time, so the motion
+          accelerates as the monomers part. Every frame shown is real data; nothing is
+          interpolated. The camera is framed once on the most separated geometry and never
+          moves again, which is what makes the change in scale readable.
+        </footer>
       </section>
 
       <section
@@ -216,7 +299,9 @@
 
         <section class="panel controls">
           <p class="subtitle">
-            The different IPD curves and SAPT levels of theory available. The s66x8 dataset has several levels of theory available. The cation water systems from NENCI2021 dataset only have SAPT2+ curves available.
+            The IPD curves and reference levels of theory this system carries. Which
+            references appear is read from the dataframe&rsquo;s own columns, so a system
+            benchmarked at SAPT2+ and one benchmarked at SAPT0 each show what they have.
           </p>
 
           <label for="plotDatasetSelect">Dataset</label>
@@ -241,9 +326,12 @@
           parameter to every atom; the <em>radius</em> variants scale damping by
           TS&hairsp;/&hairsp;MBIS atomic radii, and differ in whether damping is applied
           within a monomer (intra), between monomers (inter), or both. The
-          <strong>SAPT reference</strong> curves are the SAPT0 induction decomposition
-          those models are trying to reproduce &mdash; drawn solid for the total and
-          dashed for its three components, which sum to it exactly.
+          <strong>Reference</strong> curves are the induction energies those models are
+          trying to reproduce, grouped by level of theory &mdash; a dataframe carrying
+          several gets several groups. Each level&rsquo;s total is drawn solid. Where the
+          source also decomposes it, the components are dashed and sum to the total exactly;
+          SAPT2+ here supplies only the total, which is a complete reference rather than a
+          partial one.
         </footer>
       </section>
 
@@ -258,5 +346,6 @@
     <script type="module" src="/tabs.js"></script>
     <script type="module" src="/ipd_compute.js"></script>
     <script type="module" src="/plot.js"></script>
+    <script type="module" src="/trajectory.js"></script>
   </body>
 </html>

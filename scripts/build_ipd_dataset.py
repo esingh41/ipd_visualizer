@@ -72,19 +72,6 @@ class Model:
 
 
 @dataclass(frozen=True)
-class ReferenceEnergy:
-    """A per-system energy shown next to the models rather than as one of them.
-
-    These describe the *geometry*, not a dipole model, so they do not move when the model
-    selector changes -- which is why they are declared separately and displayed in their own
-    group rather than mixed in with ``Model.energy_column``.
-    """
-
-    label: str
-    column: str
-
-
-@dataclass(frozen=True)
 class Source:
     """One trusted pickle, the models to take from it, and the grouping metadata the
     selectors need.
@@ -97,11 +84,15 @@ class Source:
     dataset: str
     system_name: str
     out_dir: str
-    separation_column: str
-    separation_units: str
-    separation_format: str
     models: tuple[Model, ...]
-    reference_energies: tuple[ReferenceEnergy, ...] = ()
+    # Nothing here declares the separation or the reference energies. Both are derived from
+    # the dataframe by the backend -- ``dipole_data.derive_separations`` and
+    # ``dipole_data.reference_energies`` -- so the offline catalog and an uploaded dataset
+    # cannot disagree about the same pickle, and a source needs no configuration to be read.
+    #
+    # ``alt_separation_column`` is the exception, and stays: it names a hand-picked per-pickle
+    # column (``O-Na dist ang``) that describes one chosen atom pair rather than the geometry,
+    # so there is nothing to derive it from.
     alt_separation_column: str | None = None
     alt_separation_format: str = "{:.3f} Å"
 
@@ -172,16 +163,12 @@ ION_WATER_MODELS: tuple[Model, ...] = (
     ),
 )
 
-# The SAPT induction benchmark for a geometry, shown as the reference the models are read
-# against. The last three sum to the first -- verified exact on every row of both pickles --
-# so they are ordered total-first and kept together.
-#
-# The unqualified ``SAPT`` columns, not the ``SAPT0/cc-pVDZ`` variants: only one of the two
-# pickles carries those. The column names come from the backend so the offline converter
-# and the on-demand catalog cannot drift apart about which columns these are.
-SAPT_INDUCTION_ENERGIES: tuple[ReferenceEnergy, ...] = tuple(
-    ReferenceEnergy(label=label, column=column)
-    for label, column in dipole_data.SAPT_INDUCTION_ENERGIES
+# Na-benzene carries one dipole model and no others: no ``mu_ind model``/``mu_ind ref``
+# columns and none of the radius-Thole families, so its Model selector offers a single entry.
+# The column names match the ion-water set exactly, so the Model declaration is reused rather
+# than restated.
+NA_BENZENE_MODELS: tuple[Model, ...] = (
+    next(model for model in ION_WATER_MODELS if model.slug == "mbis_0_39_all"),
 )
 
 SOURCES: list[Source] = [
@@ -190,11 +177,7 @@ SOURCES: list[Source] = [
         dataset="Na-water",
         system_name="Na+-Water",
         out_dir="na-water",
-        separation_column="eq_ratio",
-        separation_units="Re",
-        separation_format="{:.2f} Re",
         models=ION_WATER_MODELS,
-        reference_energies=SAPT_INDUCTION_ENERGIES,
         alt_separation_column="O-Na dist ang",
     ),
     Source(
@@ -202,12 +185,18 @@ SOURCES: list[Source] = [
         dataset="Cl-water",
         system_name="Cl⁻-Water",
         out_dir="cl-water",
-        separation_column="eq_ratio",
-        separation_units="Re",
-        separation_format="{:.2f} Re",
         models=ION_WATER_MODELS,
-        reference_energies=SAPT_INDUCTION_ENERGIES,
         alt_separation_column="O-Cl dist ang",
+    ),
+    # No ``eq_ratio`` column and no ``... dist ang`` column: the separation comes off the
+    # ``131_Na-benzene_0.70`` id suffix, and the reference is SAPT2+/aDZ rather than SAPT0.
+    # Neither needs declaring here -- that is the point of deriving them.
+    Source(
+        path=DATA_DIR / "source" / "131_Na-benzene.pkl",
+        dataset="Na-benzene",
+        system_name="Na⁺-Benzene",
+        out_dir="na-benzene",
+        models=NA_BENZENE_MODELS,
     ),
 ]
 
@@ -223,6 +212,11 @@ EXTRA_NPZ: list[ExtraNpz] = [
         "with more than one frame.",
     ),
 ]
+
+
+def _rounded(value: float | None, places: int = 4) -> float | None:
+    """Round for catalog compactness, passing None through untouched."""
+    return None if value is None else round(value, places)
 
 
 def slugify(name: str) -> str:
@@ -291,7 +285,27 @@ def stack_dipoles(row, model: Model, n_a: int, n_b: int) -> np.ndarray:
     return mu
 
 
-def convert_row(row, source: Source) -> dict[str, Any]:
+def _row_contact_distance(row) -> float | None:
+    """Closest A-to-B contact for a source row, in Angstrom, or None.
+
+    Needed before ``convert_row`` has validated anything, because the separation source is
+    chosen across the whole pickle first. Never raises: a row whose molecule will not parse
+    simply contributes no contact distance, and ``derive_separations`` then falls back or
+    gives up rather than the build dying here instead of in convert_row, where the error
+    message is specific.
+    """
+    molecule = row.get("qcel_molecule")
+    fragments = getattr(molecule, "fragments", None)
+    if fragments is None or len(fragments) != 2:
+        return None
+    try:
+        coords = np.asarray(molecule.geometry, dtype=float) * BOHR2ANG
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return dipole_data.contact_distance(coords, len(fragments[0]))
+
+
+def convert_row(row, source: Source, separation: dict[str, Any]) -> dict[str, Any]:
     """Build one system's arrays and catalog entry from a DataFrame row."""
     system_id = str(row["system_id"])
     molecule = row["qcel_molecule"]
@@ -359,19 +373,24 @@ def convert_row(row, source: Source) -> dict[str, Any]:
     # rather than renormalizing each one to its own longest vector.
     arrays["max_abs_mu_system"] = np.float64(max_abs_mu)
 
-    separation = float(row[source.separation_column])
     entry = {
         "system_id": system_id,
         "dataset": source.dataset,
         "system_name": source.system_name,
-        "separation": separation,
-        "separation_units": source.separation_units,
-        "separation_label": source.separation_format.format(separation),
+        # Derived across the whole source by convert_source, not read from a declared column:
+        # one pickle is one trajectory, and the separation source has to describe all of it.
+        "separation": separation["separation"],
+        "separation_units": separation["separation_units"],
+        "separation_label": separation["separation_label"],
         "separation_alt_label": (
             source.alt_separation_format.format(float(row[source.alt_separation_column]))
             if source.alt_separation_column
             else None
         ),
+        # Computed from the geometry rather than read from a column, so it means the same
+        # thing for every dataset. ``alt_separation_column`` above cannot: it names a
+        # per-pickle column that only the ion-water sources happen to carry.
+        "contact_distance_ang": _rounded(dipole_data.contact_distance(coords, n_a)),
         "n_atoms": n_atoms,
         # Summary only -- the longest history at this geometry. The per-model counts in
         # ``models`` are the real thing, and the app reads the frame count off the model it
@@ -379,13 +398,11 @@ def convert_row(row, source: Source) -> dict[str, Any]:
         "n_frames": max(model["n_frames"] for model in catalog_models),
         "max_abs_mu_system": round(max_abs_mu, 6),
         "models": catalog_models,
-        # A list, not a dict: the order is part of the meaning, since the total comes first
-        # and the terms that sum to it follow. Per-system, so it stays out of the .npz for
-        # the same reason the per-model energies do.
-        "reference_energies": [
-            {"label": ref.label, "kcalmol": round(float(row[ref.column]), 6)}
-            for ref in source.reference_energies
-        ],
+        # A list, not a dict: the order is part of the meaning, since each level's total
+        # comes first and its breakdown follows. Per-system, so it stays out of the .npz for
+        # the same reason the per-model energies do. Detected from the columns by the same
+        # function the on-demand catalog uses, so both halves report the same levels.
+        "reference_energies": dipole_data.reference_energies(row),
         "file": f"{source.out_dir}/{system_id}.npz",
     }
     return {"arrays": arrays, "entry": entry}
@@ -401,15 +418,16 @@ def convert_source(source: Source) -> Iterator[dict[str, Any]]:
     validate_models(source.models, source.path.name)
 
     df = pd.read_pickle(source.path)
-    for column in ("system_id", "qcel_molecule", source.separation_column):
+    for column in ("system_id", "qcel_molecule"):
         if column not in df.columns:
             raise SystemExit(f"{source.path.name} is missing the required column {column!r}")
 
-    # A registry typo must fail the build loudly. Silently dropping the model or the energy
-    # instead would leave a panel that is short by one row and nothing to say why.
+    # Models stay declared and stay strict: a registry typo must fail the build loudly, since
+    # silently dropping a model would leave a selector short by one entry with nothing to say
+    # why. Reference energies are *detected*, so they are deliberately absent from this check
+    # -- a source that carries no SAPT columns is a source with no reference, not a broken one.
     available = set(df.columns)
     declared = [column for model in source.models for column in model.columns]
-    declared += [ref.column for ref in source.reference_energies]
     missing = [column for column in declared if column not in available]
     if missing:
         raise SystemExit(
@@ -421,9 +439,21 @@ def convert_source(source: Source) -> Iterator[dict[str, Any]]:
     for model in source.models:
         print(f"    {model.slug:42} {model.label}")
 
+    # One pickle is one trajectory, so the separation source is chosen across the whole frame
+    # at once -- see dipole_data.derive_separations. Deriving per row could label one geometry
+    # in Re and the next in Angstrom, and the catalog would sort into nonsense.
+    separations = dipole_data.derive_separations(
+        {
+            "system_id": str(row["system_id"]),
+            "row": row,
+            "contact_ang": _row_contact_distance(row),
+        }
+        for _, row in df.iterrows()
+    )
+
     seen_separations: set[float] = set()
-    for _, row in df.iterrows():
-        converted = convert_row(row, source)
+    for (_, row), derived in zip(df.iterrows(), separations):
+        converted = convert_row(row, source, derived)
         separation = converted["entry"]["separation"]
         if separation in seen_separations:
             raise SystemExit(
@@ -446,6 +476,14 @@ def catalog_entry_for_npz(extra: ExtraNpz) -> dict[str, Any]:
     with np.load(extra.path, allow_pickle=False) as data:
         mu = np.asarray(data["mu_history"], dtype=float)
         symbols = data["symbols"]
+        # Both optional by the .npz contract, so this stays a lookup rather than an index.
+        # A file without them simply has no contact distance.
+        coords = data["coords"] if "coords" in data.files else None
+        n_atoms_a = int(data["n_atoms_A"]) if "n_atoms_A" in data.files else 0
+
+    contact = (
+        dipole_data.contact_distance(coords, n_atoms_a) if coords is not None else None
+    )
 
     return {
         "system_id": extra.path.stem,
@@ -455,6 +493,7 @@ def catalog_entry_for_npz(extra: ExtraNpz) -> dict[str, Any]:
         "separation_units": extra.separation_units,
         "separation_label": extra.separation_label,
         "separation_alt_label": None,
+        "contact_distance_ang": _rounded(contact),
         "n_atoms": len(symbols),
         "n_frames": int(mu.shape[0]),
         "max_abs_mu_system": round(float(np.linalg.norm(mu, axis=-1).max()), 6),

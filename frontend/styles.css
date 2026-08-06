@@ -106,6 +106,30 @@ body {
   }
 }
 
+/* The trajectory page is the viewer page again -- same viewer, same sidebar, same
+   breakpoint -- so it reuses .viewer-panel and .controls and only needs its own shell. */
+.traj-shell {
+  display: grid;
+  grid-template-areas:
+    "viewer"
+    "controls";
+  gap: 1rem;
+  padding: 1rem;
+}
+
+@media (min-width: 1025px) {
+  .traj-shell {
+    grid-template-areas: "viewer controls";
+    grid-template-columns: minmax(0, 1fr) 21rem;
+    align-items: start;
+  }
+}
+
+/* Spans both columns so the note runs under the viewer and the sidebar together. */
+.traj-note {
+  grid-column: 1 / -1;
+}
+
 /* The compute page owns the full width, so its controls spread into two columns instead
    of queueing single-file down a sidebar. */
 .compute-shell {
@@ -431,7 +455,8 @@ select:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-#viewer {
+#viewer,
+#trajViewer {
   width: 100%;
   min-height: 520px;
   height: 56vh;
@@ -541,7 +566,8 @@ select:disabled {
 }
 
 @media (max-width: 1024px) {
-  #viewer {
+  #viewer,
+  #trajViewer {
     min-height: 400px;
     height: 50vh;
   }

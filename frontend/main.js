@@ -1,3 +1,11 @@
+import {
+  DEFAULT_ARROW_LEN,
+  addDipoleArrows,
+  applyMoleculeStyle,
+  isLaidOut,
+  stripIntermonomerBonds,
+} from "/molview.js";
+
 const statusEl = document.getElementById("status");
 const frameLabelEl = document.getElementById("frameLabel");
 const timelineEl = document.getElementById("timeline");
@@ -17,16 +25,8 @@ const restartBtn = document.getElementById("restartBtn");
 
 const viewer = $3Dmol.createViewer("viewer", { backgroundColor: "white" });
 
-// Ported from pymol_dipole.py / pymol_dipole_movie.py. Changing these changes the
-// scientific reading of the picture, so they stay named and grouped.
-const DEFAULT_ARROW_LEN = 2.0; // Angstrom, longest arrow in the whole history
-const MIN_MU = 1e-6; // below this an arrow is skipped entirely
-const CONE_OVERSHOOT = 1.3; // total arrow length is 1.3 * scale * |mu|
-const CYL_RADIUS = 0.05;
-const CONE_RADIUS = 0.1;
-const ARROW_COLOR = 0xbf00bf; // INDUCED_MODEL_COLOR (0.75, 0.0, 0.75)
-const SPHERE_SCALE = 0.15;
-const STICK_RADIUS = 0.55 * SPHERE_SCALE; // 0.0825
+// The arrow convention and the nuclei style live in molview.js, shared with the Trajectory
+// tab. What stays here is the playback timing, which is this tab's alone.
 const PLAYBACK_MS = 125; // DEFAULT_FPS = 8
 const MAX_DOTS = 40; // beyond this the timeline degrades to a range input
 
@@ -79,89 +79,10 @@ export async function callJson(url, method = "GET", body = null) {
   return data;
 }
 
-// --- structure ------------------------------------------------------------
-
-// XYZ carries no bond table, so 3Dmol guesses bonds by distance: it bonds two atoms whenever
-// they sit closer than r1 + r2 + 0.25 A, which for Na-O is 2.52 A and so invents an Na+---O
-// stick at every separation up to 1.10 Re. The two monomers of a dimer are non-bonded by
-// construction, so any bond crossing the A/B boundary is an artefact of that guess.
-//
-// Bonds are assigned once when the model is parsed and re-read from atom.bonds on every
-// setStyle, so deleting them here -- before the first setStyle -- is all it takes; there is no
-// drawn geometry to fix up afterwards.
-function stripIntermonomerBonds(model, nAtomsA) {
-  if (!nAtomsA) {
-    // No declared monomer split: there is no boundary to enforce, and inventing one would be
-    // worse than leaving 3Dmol's guess alone.
-    return;
-  }
-
-  // An empty selection returns the model's atoms, by reference, in the same index order that
-  // atom.bonds refers to. The XYZ parser does not set atom.index, so position *is* the index
-  // -- which only holds while the selection is everything.
-  const atoms = model.selectedAtoms({});
-  if (atoms.length !== currentSystem.n_atoms) {
-    setStatus(
-      `Skipped intermonomer bond removal: viewer has ${atoms.length} atoms, ` +
-        `data has ${currentSystem.n_atoms}.`,
-      "error",
-    );
-    return;
-  }
-
-  const monomerOf = (index) => index < nAtomsA;
-  atoms.forEach((atom, index) => {
-    const bonds = [];
-    const bondOrder = [];
-    for (let i = 0; i < atom.bonds.length; i += 1) {
-      if (monomerOf(atom.bonds[i]) === monomerOf(index)) {
-        bonds.push(atom.bonds[i]);
-        bondOrder.push(atom.bondOrder[i]);
-      }
-    }
-    // Every atom is filtered, so both halves of a crossing bond go: a bond listed by only one
-    // of its two atoms would still render, as a half-length stick.
-    atom.bonds = bonds;
-    atom.bondOrder = bondOrder;
-  });
-}
-
 // --- arrows ---------------------------------------------------------------
 
 function currentScale() {
   return baseScale * Number(scaleSliderEl.value);
-}
-
-// Reproduces _arrow_cgo (pymol_dipole.py:158-193): the arrow *begins* at the atom
-// centre rather than being centred on it, and the cone is added on top of the full
-// shaft, so the tip reaches CONE_OVERSHOOT * scale * |mu|.
-function addDipoleArrows(frame, scale) {
-  const coords = currentSystem.coords;
-  for (let i = 0; i < frame.length; i += 1) {
-    const mu = frame[i];
-    const magnitude = Math.hypot(mu[0], mu[1], mu[2]);
-    if (magnitude < MIN_MU) {
-      // A zero-length shaft plus a degenerate cone renders as a stray speck that
-      // flickers frame to frame.
-      continue;
-    }
-    const [x, y, z] = coords[i];
-    const reach = CONE_OVERSHOOT * scale;
-    viewer.addArrow({
-      start: { x, y, z },
-      end: {
-        x: x + reach * mu[0],
-        y: y + reach * mu[1],
-        z: z + reach * mu[2],
-      },
-      // 3Dmol places the cone base at start + mid * (end - start), so mid pins it to
-      // exactly where PyMOL's CYLINDER ends and its CONE begins.
-      mid: 1 / CONE_OVERSHOOT,
-      radius: CYL_RADIUS,
-      radiusRatio: CONE_RADIUS / CYL_RADIUS,
-      color: ARROW_COLOR,
-    });
-  }
 }
 
 // --- frame lifecycle ------------------------------------------------------
@@ -221,7 +142,12 @@ function showFrame(index) {
   }
   currentFrame = Math.max(0, Math.min(index, currentSystem.n_frames - 1));
   viewer.removeAllShapes();
-  addDipoleArrows(currentSystem.mu_history[currentFrame], currentScale());
+  addDipoleArrows(
+    viewer,
+    currentSystem.coords,
+    currentSystem.mu_history[currentFrame],
+    currentScale(),
+  );
   updateFrameLabel();
   updateTimeline();
   viewer.render();
@@ -390,6 +316,32 @@ function populateModelSelector() {
 
 // --- system information ---------------------------------------------------
 
+// Reference energies as <dl> rows, one headed group per level of theory. A dataframe can
+// carry several -- na-water has both SAPT0 and SAPT0/cc-pVDZ, computed in different basis
+// sets -- and those are different benchmarks, so they get separate headings rather than being
+// run together into one undifferentiated list.
+//
+// A row is [term, value]; a lone string is a full-width group heading, which is the shape
+// both this tab and the Trajectory tab render. Exported for that second caller.
+export function referenceRows(referenceEnergies = []) {
+  const rows = [];
+  let heading = null;
+  for (const entry of referenceEnergies) {
+    // Catalog order carries the meaning: each level's total comes first, then the terms that
+    // decompose it. A level with no breakdown -- SAPT2+/aDZ gives only a total -- is a
+    // one-row group, not a defect. An entry with no `level` at all can only come from a
+    // catalog built before levels existed; it reads as one unnamed group rather than
+    // "undefined reference".
+    const level = entry.level ?? "SAPT";
+    if (level !== heading) {
+      rows.push(`${level} reference`);
+      heading = level;
+    }
+    rows.push([entry.label, `${entry.kcalmol.toFixed(3)} kcal/mol`]);
+  }
+  return rows;
+}
+
 function setPlaybackEnabled(enabled) {
   for (const button of [playBtn, prevBtn, nextBtn, restartBtn]) {
     button.disabled = !enabled;
@@ -430,17 +382,9 @@ function updateSystemInfo() {
       ? []
       : [["Polarization energy", `${energy.toFixed(3)} kcal/mol`]]),
     // Properties of the geometry, not of the selected model: they stay put while
-    // "Polarization energy" above them follows the model selector. The heading is what says
-    // so, which is why they are grouped rather than appended as four more plain rows.
-    ...(referenceEnergies.length === 0
-      ? []
-      : [
-          "SAPT0 reference",
-          ...referenceEnergies.map(({ label, kcalmol }) => [
-            label,
-            `${kcalmol.toFixed(3)} kcal/mol`,
-          ]),
-        ]),
+    // "Polarization energy" above them follows the model selector. The headings are what say
+    // so, which is why they are grouped rather than appended as plain rows.
+    ...referenceRows(referenceEnergies),
   ];
 
   systemInfoEl.replaceChildren();
@@ -534,14 +478,13 @@ export function showComputedSystem(data) {
     // per system rather than once per frame.
     viewer.clear();
     const model = viewer.addModel(data.xyz, "xyz");
-    stripIntermonomerBonds(model, data.n_atoms_A);
-    viewer.setStyle(
-      {},
-      {
-        sphere: { scale: SPHERE_SCALE, colorscheme: "greenCarbon" },
-        stick: { radius: STICK_RADIUS, colorscheme: "greenCarbon" },
-      },
-    );
+    if (!stripIntermonomerBonds(model, data.n_atoms_A, data.n_atoms)) {
+      setStatus(
+        "Skipped intermonomer bond removal: the viewer and the data disagree on atom count.",
+        "error",
+      );
+    }
+    applyMoleculeStyle(viewer);
     currentFrame = 0;
   }
 
@@ -647,22 +590,10 @@ scaleSliderEl.addEventListener("input", () => {
 
 // --- viewer sizing --------------------------------------------------------
 
-// A WebGL canvas measures its container, and a container inside a hidden tab panel is
-// 0x0. Resizing to that collapses the canvas, and it stays collapsed after the panel is
-// shown again -- so every resize path has to check first.
-function isViewerLaidOut() {
-  const container = document.getElementById("viewer");
-  return (
-    Boolean(container) &&
-    !container.closest("[hidden]") &&
-    container.clientWidth > 0 &&
-    container.clientHeight > 0
-  );
-}
-
-// Safe to call from anywhere, including while the Visualize tab is hidden.
+// Safe to call from anywhere, including while the Visualize tab is hidden -- isLaidOut is
+// what makes it so; see the note on it in molview.js.
 export function resizeViewer() {
-  if (!isViewerLaidOut()) {
+  if (!isLaidOut(document.getElementById("viewer"))) {
     return;
   }
   viewer.resize();

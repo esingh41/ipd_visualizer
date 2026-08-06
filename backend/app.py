@@ -6,7 +6,7 @@ from typing import Any
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from backend.services import dataset_store, dipole_data, ipd_compute
+from backend.services import dataset_store, dipole_data, ipd_compute, trajectory
 from backend.services.errors import IpdError
 
 # Dimer dataframes with per-row molecules and multipoles run to a few hundred MB at most.
@@ -72,6 +72,23 @@ def create_app() -> Flask:
             return jsonify(ipd_compute.load_stored(dataset_id, row_id, model))
         return jsonify(dipole_data.get_system(system_id, model))
 
+    @app.get("/api/ipd/trajectory")
+    def ipd_trajectory() -> Any:
+        # Query parameters for the same reason /api/ipd/system uses them: a system_name
+        # carries characters a path segment would mangle -- "Na+-Water", "Cl⁻-Water".
+        dataset = request.args.get("dataset", "").strip()
+        system = request.args.get("system", "").strip()
+        if not dataset or not system:
+            return (
+                jsonify(
+                    {"error": "Missing required query parameters 'dataset' and 'system'"}
+                ),
+                400,
+            )
+        return jsonify(
+            trajectory.build_trajectory(dataset, system, request.args.get("model") or None)
+        )
+
     @app.get("/api/ipd/capability")
     def ipd_capability() -> Any:
         # Always 200, even when IPD is unavailable: "can this server compute?" is a
@@ -129,9 +146,9 @@ def create_app() -> Flask:
 
     @app.post("/api/datasets/<dataset_id>/restore")
     def restore_dataset(dataset_id: str) -> Any:
-        with dataset_store.dataset_lock(dataset_id):
-            dataset_store.restore_original(dataset_id)
-        return jsonify(ipd_compute.summary(dataset_id))
+        # ipd_compute owns the lock here: restoring is not a plain file copy, it has to
+        # re-apply the canonical index and the derived columns the working copy carries.
+        return jsonify(ipd_compute.restore(dataset_id))
 
     @app.get("/api/datasets/<dataset_id>/export")
     def export_dataset(dataset_id: str) -> Any:

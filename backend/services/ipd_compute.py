@@ -203,6 +203,7 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "geometry": ("qcel_molecule",),
     "mbis_a": ("q hf/adz A", "mu hf/adz A", "theta hf/adz A", "volume ratios A"),
     "mbis_b": ("q hf/adz B", "mu hf/adz B", "theta hf/adz B", "volume ratios B"),
+    "mbis_dimer": ("q hf/adz dimer", "mu hf/adz dimer", "theta hf/adz dimer", "volume ratios dimer"),
 }
 
 ALL_REQUIRED_COLUMNS: Tuple[str, ...] = tuple(
@@ -240,7 +241,7 @@ MODEL_FOR_RADIUS: Dict[Optional[str], Dict[str, str]] = {
 #
 # When a dataset does not follow the convention nothing is stripped, every group holds one
 # geometry, and the cascade still works -- it just has nothing to collapse.
-_SEPARATION_TOKEN = re.compile(r"[_-](\d+(?:\.\d+)?)$")
+_SEPARATION_TOKEN = dipole_data.SEPARATION_TOKEN
 
 
 def system_group(system_id: str) -> str:
@@ -249,60 +250,10 @@ def system_group(system_id: str) -> str:
     return stripped or str(system_id)
 
 
-def separation_from_system_id(system_id: str) -> Optional[float]:
-    """The separation encoded in a ``system_id``'s trailing token, if it has one.
-
-    Read as a multiple of the equilibrium separation, which is what the S66x8 and
-    ion-water conventions mean by it. A dataset whose suffix means something else would be
-    mislabelled here, which is why an explicit ``eq_ratio`` column always wins.
-    """
-    match = _SEPARATION_TOKEN.search(str(system_id))
-    return float(match.group(1)) if match else None
-
-
-# Columns worth showing in the Geometry selector, most physically meaningful first. An
-# opaque row index is the last resort, never the first choice.
-_LABEL_CANDIDATES: Tuple[Tuple[str, str], ...] = (
-    ("eq_ratio", "{:.2f} Re"),
-    ("separation", "{:.2f}"),
-)
-
-
-def _label_source(df) -> Optional[Tuple[str, str]]:
-    """Pick the column the Geometry selector should label rows with."""
-    for column, fmt in _LABEL_CANDIDATES:
-        if column in df.columns:
-            return column, fmt
-    # Fall back to any "... dist ang" column, which the ion-water sets use for the real
-    # intermolecular distance.
-    for column in df.columns:
-        if isinstance(column, str) and column.strip().endswith("dist ang"):
-            return column, "{:.3f} Å"
-    return None
-
-
-def geometry_separation(row, source: Optional[Tuple[str, str]]) -> Optional[float]:
-    """The numeric separation for a row: an explicit column first, then the id suffix.
-
-    Drives both the Geometry label and its sort position, so a label and its ordering can
-    never come from different numbers.
-    """
-    if source is not None:
-        try:
-            return float(row[source[0]])
-        except (TypeError, ValueError, KeyError):
-            pass
-    return separation_from_system_id(row.get("system_id", ""))
-
-
-def _geometry_label(row, source: Optional[Tuple[str, str]]) -> str:
-    separation = geometry_separation(row, source)
-    if separation is not None:
-        # The suffix carries no units of its own, so it is formatted like an eq_ratio --
-        # which is what it is for every dataset following this convention.
-        fmt = source[1] if source is not None else "{:.2f} Re"
-        return fmt.format(separation)
-    return str(row.get("system_id", ""))
+# Re-exported so callers that only care about the separation do not have to reach into
+# dipole_data for it. The regex above is shared, so the group name and the separation can
+# never disagree about where a group name ends.
+separation_from_system_id = dipole_data.separation_from_system_id
 
 
 # --- validation -------------------------------------------------------------
@@ -313,6 +264,25 @@ def _fragments(molecule) -> Optional[List[np.ndarray]]:
     if fragments is None:
         return None
     return [np.asarray(fragment) for fragment in fragments]
+
+
+def _contact_distance(molecule) -> Optional[float]:
+    """Closest A-to-B contact for a row's molecule, in Angstrom, or None.
+
+    Never raises: this feeds a catalog entry, and one geometry with an odd molecule must
+    not take the whole listing down with it.
+    """
+    if molecule is None:
+        return None
+    fragments = _fragments(molecule)
+    if fragments is None or len(fragments) != 2:
+        return None
+    try:
+        # qcelemental keeps geometry in bohr; the catalog reports Angstrom throughout.
+        coords = np.asarray(molecule.geometry, dtype=float) * BOHR2ANG
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return dipole_data.contact_distance(coords, len(fragments[0]))
 
 
 def _row_is_usable(row) -> bool:
@@ -450,6 +420,72 @@ def validate_row(row, radius: Optional[str]) -> None:
 # --- registration -----------------------------------------------------------
 
 
+# Columns the app derives for a dataframe that does not carry them. Both describe the
+# geometry and nothing else, so deriving them can never contradict the uploaded science.
+CONTACT_COLUMN = "contact_distance_ang"
+EQ_RATIO_COLUMN = "eq_ratio"
+
+
+def normalize_dataset(df) -> List[str]:
+    """Fill in the derivable metadata columns in place, and name the ones that were added.
+
+    A dataframe that states its separation and contact distance is easier to work with than
+    one that does not, and both are recoverable from what every usable row already carries --
+    so supplying them is this app's job rather than the uploader's.
+
+    **Never overwrites a column the dataframe already has.** If the uploader supplied
+    ``eq_ratio``, theirs wins: the point is to fill gaps, not to correct their science.
+
+    ``eq_ratio`` is written only where a ratio is genuinely recoverable -- an explicit column
+    or the ``system_id`` suffix. Where only a contact distance exists the cell is left NaN,
+    because an Angstrom distance is not a ratio and writing it as one would be a lie that
+    every later reader would believe.
+    """
+    added: List[str] = []
+
+    if CONTACT_COLUMN not in df.columns:
+        df[CONTACT_COLUMN] = [
+            _contact_distance(row.get("qcel_molecule")) for _, row in df.iterrows()
+        ]
+        added.append(CONTACT_COLUMN)
+
+    if EQ_RATIO_COLUMN not in df.columns:
+        ratios = [
+            dipole_data.separation_from_system_id(row.get("system_id", ""))
+            for _, row in df.iterrows()
+        ]
+        if any(ratio is not None for ratio in ratios):
+            df[EQ_RATIO_COLUMN] = [
+                np.nan if ratio is None else ratio for ratio in ratios
+            ]
+            added.append(EQ_RATIO_COLUMN)
+
+    return added
+
+
+def restore(dataset_id: str) -> Dict[str, Any]:
+    """Discard every computed result, then rebuild the working copy's invariants.
+
+    Reinstating ``original.pkl`` verbatim would undo more than the calculations: the working
+    copy is also canonically indexed and carries the derived metadata columns, neither of
+    which the uploaded file has. So restore re-applies both, leaving a working copy identical
+    to the one registration produced -- minus the results, which is the whole point.
+    """
+    directory = dataset_store.dataset_dir(dataset_id)
+    with dataset_store.dataset_lock(dataset_id):
+        df = dataset_store.read_dataframe(directory / dataset_store.ORIGINAL_NAME)
+        df = df.reset_index(drop=True)
+        added_columns = normalize_dataset(df)
+        dataset_store.save_working(dataset_id, df)
+
+        meta = dataset_store.read_meta(dataset_id)
+        meta["added_columns"] = added_columns
+        dataset_store.write_meta(dataset_id, meta)
+
+    _CATALOG_CACHE.pop(dataset_id, None)
+    return summary(dataset_id)
+
+
 def register(raw: bytes, filename: str) -> Dict[str, Any]:
     """Register an uploaded dataframe and return its summary.
 
@@ -465,6 +501,8 @@ def register(raw: bytes, filename: str) -> Dict[str, Any]:
     # One canonical ordering, fixed at registration. Every row_id is a position in *this*
     # frame, and the server never reorders or filters working.pkl afterwards.
     df = df.reset_index(drop=True)
+
+    added_columns = normalize_dataset(df)
 
     compatibility = inspect_compatibility(df)
     rows = {
@@ -483,6 +521,7 @@ def register(raw: bytes, filename: str) -> Dict[str, Any]:
         "n_rows": int(len(df)),
         "n_systems": len(groups),
         "compatibility": compatibility,
+        "added_columns": added_columns,
         "rows": rows,
     }
 
@@ -506,7 +545,6 @@ def list_systems(df, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     from backend.services import radius_thole
 
-    label_source = _label_source(df)
     rows_meta = meta.get("rows", {})
 
     groups: Dict[str, List[Dict[str, Any]]] = {}
@@ -521,14 +559,32 @@ def list_systems(df, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             {
                 "row_id": row_id,
                 "system_id": system_id,
-                "label": _geometry_label(row, label_source),
-                "separation": geometry_separation(row, label_source),
                 "position": position,
                 "stored": stored,
                 "usable": _row_is_usable(row),
                 "fingerprint": rows_meta.get(row_id, {}).get("fingerprint"),
+                # Kept only long enough to derive the separation below; dropped before this
+                # is serialized, since a qcelemental Molecule is not JSON.
+                "_row": row,
             }
         )
+
+    # Per group, not per row: the source has to describe the whole trajectory or the
+    # geometries would sort an Re ratio against an Angstrom distance. See derive_separations.
+    for geometries in groups.values():
+        derived = dipole_data.derive_separations(
+            {
+                "system_id": geometry["system_id"],
+                "row": geometry["_row"],
+                "contact_ang": _contact_distance(geometry["_row"].get("qcel_molecule")),
+            }
+            for geometry in geometries
+        )
+        for geometry, values in zip(geometries, derived):
+            geometry.pop("_row")
+            geometry["separation"] = values["separation"]
+            geometry["separation_units"] = values["separation_units"]
+            geometry["label"] = values["separation_label"]
 
     # A dataframe's rows are in whatever order they were built in -- s66x8 interleaves all
     # 66 trajectories -- so a trajectory only reads as one if its geometries are sorted by
@@ -570,6 +626,9 @@ def summary(dataset_id: str) -> Dict[str, Any]:
         "n_geometries": int(len(df)),
         "n_with_results": n_with_results,
         "compatibility": meta.get("compatibility", {}),
+        # Named rather than silent: the working copy carries columns the upload did not, and
+        # the export hands them back, so the sidebar says which.
+        "added_columns": meta.get("added_columns", []),
         "apnet_pt": capability(),
         "systems": systems,
     }
@@ -760,17 +819,9 @@ def parse_dataset_system_id(system_id: str) -> Optional[Tuple[str, str]]:
     return dataset_id, row_id
 
 
-def _reference_energies(row) -> List[Dict[str, Any]]:
-    """SAPT induction terms for a geometry, when the dataframe carries them."""
-    energies = []
-    for label, column in dipole_data.SAPT_INDUCTION_ENERGIES:
-        try:
-            value = float(row[column])
-        except (TypeError, ValueError, KeyError):
-            continue
-        if np.isfinite(value):
-            energies.append({"label": label, "kcalmol": round(value, 6)})
-    return energies
+# Detected from the columns, not declared per dataset, and shared with the offline converter
+# so an uploaded dataframe and a bundled one report the same levels for the same columns.
+_reference_energies = dipole_data.reference_energies
 
 
 def _dataset_catalog_entries(dataset_id: str, df, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -842,10 +893,18 @@ def _dataset_catalog_entries(dataset_id: str, df, meta: Dict[str, Any]) -> List[
                     "system_id": f"{dataset_id}/{geometry['row_id']}",
                     "dataset": dataset_label,
                     "system_name": group["group"],
+                    # list_systems has already chosen one separation source for the whole
+                    # trajectory and stamped its real units, so nothing is guessed here. The
+                    # row position is the last resort for a dataset that declares nothing and
+                    # whose geometry will not parse -- it still has to sort somehow.
                     "separation": separation if separation is not None else float(geometry["position"]),
-                    "separation_units": "Re" if separation is not None else None,
+                    "separation_units": geometry["separation_units"],
                     "separation_label": geometry["label"],
                     "separation_alt_label": geometry["system_id"],
+                    # Geometry-derived, so it means the same thing here as it does for a
+                    # bundled system -- unlike separation_alt_label just above, which
+                    # carries a distance for bundled entries and an id for these.
+                    "contact_distance_ang": _contact_distance(molecule),
                     "n_atoms": n_atoms,
                     "n_frames": max(model["n_frames"] for model in models),
                     # Unrounded, unlike the bundled catalog's copy of this number: that one

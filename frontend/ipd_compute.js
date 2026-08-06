@@ -161,6 +161,13 @@ function renderDetails() {
     if (compat.ok === false && !compat.missing_columns?.length) {
       lines.push(`No usable rows (${compat.usable_rows}/${compat.total_rows}).`);
     }
+    // The working copy carries columns the upload did not, and the export hands them back,
+    // so it is said out loud rather than left as a surprise in the downloaded file.
+    if (ipd.dataset.added_columns?.length) {
+      lines.push(
+        `Derived for you: ${ipd.dataset.added_columns.join(", ")} — included in the export.`,
+      );
+    }
   }
 
   detailsEl.replaceChildren();

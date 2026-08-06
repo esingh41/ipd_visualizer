@@ -18,6 +18,7 @@ const statusEl = document.getElementById("plotStatus");
 // and the tab would refetch on every activation forever.
 let catalog = null;
 let series = [];
+let groups = [];
 let currentAxis = null;
 let selected = new Set();
 let drawn = false;
@@ -50,13 +51,13 @@ const IPD_MODELS = [
   ["radius_thole_ts_mbis_inter_only", "IPD (radius, inter)"],
 ];
 
-// Keyed by the reference label the catalog uses. Only the induction family appears in the
-// bundled data; the others are here so an S66x8 import needs no changes.
-const SAPT_STYLE = {
-  "Induction total": { color: "--sapt-ind", dash: "solid" },
-  "ind20,r": { color: "--sapt-ind", dash: "dash" },
-  "exch-ind20,r": { color: "--sapt-ind", dash: "dot" },
-  "δHF": { color: "--sapt-ind", dash: "dashdot" },
+// Dash pattern per reference term, keyed by the label the catalog uses. A term this does not
+// name still draws -- see styleFor -- so a decomposition with an extra component needs no
+// change here.
+const SAPT_DASH = {
+  "ind20,r": "dash",
+  "exch-ind20,r": "dot",
+  "δHF": "dashdot",
 };
 
 // Fallback for labels the map above has not seen, matched on the conventional SAPT
@@ -86,12 +87,13 @@ function styleFor(entry) {
     return { color: cssVar(IPD_COLORS[entry.rank % IPD_COLORS.length]), dash: "solid" };
   }
 
-  const known = SAPT_STYLE[entry.label];
-  if (known) {
-    return { color: cssVar(known.color), dash: known.dash };
-  }
+  // Solid means "this is a level's total", and it comes from the payload rather than from
+  // recognising a label. A level that reports only a total -- SAPT2+/aDZ does -- would
+  // otherwise fall through to the unknown-label branch and be drawn as a dashed component,
+  // which is exactly the wrong thing to say about it.
+  const dash = entry.isTotal ? "solid" : (SAPT_DASH[entry.label] ?? "dash");
   const matched = SAPT_FALLBACK.find(([pattern]) => pattern.test(entry.label));
-  return { color: cssVar(matched ? matched[1] : "--muted"), dash: "dash" };
+  return { color: cssVar(matched ? matched[1] : "--sapt-ind"), dash };
 }
 
 // --- data -----------------------------------------------------------------
@@ -159,7 +161,7 @@ function buildSeries(entries, datasetName, systemName) {
 
   const byId = new Map();
 
-  const push = (id, label, group, rank, row, y) => {
+  const push = (id, label, group, rank, row, y, extra = {}) => {
     // Skips the `model` and `ref` slugs without naming them: they carry a null energy
     // because they are dipole snapshots, not energies. Any future slug that does the
     // same is handled the same way.
@@ -167,7 +169,7 @@ function buildSeries(entries, datasetName, systemName) {
       return;
     }
     if (!byId.has(id)) {
-      byId.set(id, { id, label, group, rank, x: [], y: [], customdata: [] });
+      byId.set(id, { id, label, group, rank, x: [], y: [], customdata: [], ...extra });
     }
     const entry = byId.get(id);
     entry.x.push(axis.value(row));
@@ -199,29 +201,60 @@ function buildSeries(entries, datasetName, systemName) {
       }
     }
     for (const ref of row.reference_energies ?? []) {
-      // Prefixed so a reference label can never collide with a model slug. No rank: SAPT
-      // styling keys off the label, and the catalog's order already carries meaning.
-      push(`sapt:${ref.label}`, ref.label, "sapt", null, row, ref.kcalmol);
+      const level = ref.level ?? "SAPT";
+      // The level is part of the id, not just the group: na-water carries both SAPT0 and
+      // SAPT0/cc-pVDZ, and both label their total "Induction total". Keying on the label
+      // alone would collapse two different benchmarks into one curve, silently, with the
+      // second level's points appended to the first's.
+      //
+      // No rank: the catalog's order already carries the meaning, total then breakdown.
+      push(
+        `sapt:${level}:${ref.label}`,
+        // The level rides in the name so the legend and the unified hover stay readable
+        // with two levels ticked at once; the curve list strips it back off, since there
+        // the group heading is already saying it.
+        `${level} ${ref.label}`,
+        `sapt:${level}`,
+        null,
+        row,
+        ref.kcalmol,
+        { level, term: ref.label, isTotal: Boolean(ref.is_total) },
+      );
     }
   }
 
   // IPD models first and in IPD_MODELS order, so the list reads the same whichever dataset
   // is selected -- the bundled catalog and an upload emit their models in different orders.
-  // Array#sort is stable, so returning 0 leaves SAPT in catalog order, which is meaningful
-  // there: the total comes first, then the three terms that sum to it.
+  // Array#sort is stable, so returning 0 leaves the reference series in catalog order, which
+  // is meaningful there: each level's total comes first, then the terms decomposing it.
   const ordered = [...byId.values()].sort((a, b) => {
-    if (a.group !== b.group) {
-      return a.group === "ipd" ? -1 : 1;
+    const aIpd = a.group === "ipd";
+    const bIpd = b.group === "ipd";
+    if (aIpd !== bIpd) {
+      return aIpd ? -1 : 1;
     }
-    return a.group === "ipd" ? a.rank - b.rank : 0;
+    return aIpd ? a.rank - b.rank : 0;
   });
 
-  return { series: ordered, axis };
+  // One group per level of theory, in the order the catalog first mentioned them. Built from
+  // the data rather than declared, so a dataframe carrying a level this app has never seen
+  // still gets its own headed section.
+  const groups = [
+    "ipd",
+    ...[...new Set(ordered.filter((e) => e.group !== "ipd").map((e) => e.group))],
+  ];
+
+  return { series: ordered, groups, axis };
 }
 
 // --- curve selector -------------------------------------------------------
 
-const GROUP_LABELS = { ipd: "IPD models", sapt: "SAPT reference" };
+// "ipd" is the app's own predictions; every other group is a reference level of theory, named
+// by the catalog ("SAPT0", "SAPT0/cc-pVDZ", "SAPT2+/aDZ"), so its heading is built rather than
+// looked up.
+function groupLabel(group) {
+  return group === "ipd" ? "IPD models" : `${group.slice("sapt:".length)} reference`;
+}
 
 function buildCurveList() {
   curveListEl.replaceChildren();
@@ -230,7 +263,7 @@ function buildCurveList() {
   legend.textContent = "Curves";
   curveListEl.append(legend);
 
-  for (const group of ["ipd", "sapt"]) {
+  for (const group of groups) {
     const members = series.filter((entry) => entry.group === group);
     if (members.length === 0) {
       continue;
@@ -238,7 +271,7 @@ function buildCurveList() {
 
     const heading = document.createElement("p");
     heading.className = "plot-curve-group";
-    heading.textContent = GROUP_LABELS[group];
+    heading.textContent = groupLabel(group);
     curveListEl.append(heading);
 
     for (const entry of members) {
@@ -268,7 +301,9 @@ function buildCurveList() {
       }
 
       const text = document.createElement("span");
-      text.textContent = entry.label;
+      // The bare term: the group heading above it already names the level, and repeating it
+      // on every row would make three near-identical lines of "SAPT0/cc-pVDZ ...".
+      text.textContent = entry.term ?? entry.label;
 
       row.append(box, swatch, text);
       curveListEl.append(row);
@@ -281,7 +316,7 @@ function buildCurveList() {
 function isLaidOut() {
   // A chart built inside a hidden panel measures 0x0 and stays collapsed after the panel
   // is shown, so every draw and resize checks first. Same hazard the 3Dmol viewer has;
-  // see the matching guard at main.js:653.
+  // see the matching guard, isLaidOut, in molview.js.
   return (
     Boolean(chartEl) &&
     !chartEl.closest("[hidden]") &&
@@ -384,7 +419,11 @@ function draw() {
 // --- selector cascade -----------------------------------------------------
 
 function rebuildSeries() {
-  ({ series, axis: currentAxis } = buildSeries(catalog, datasetEl.value, systemEl.value));
+  ({ series, groups, axis: currentAxis } = buildSeries(
+    catalog,
+    datasetEl.value,
+    systemEl.value,
+  ));
 
   // Keep whatever was checked if those curves still exist, so switching system compares
   // like with like. Falls back to the IPD models -- the tab is called Plot IPD.

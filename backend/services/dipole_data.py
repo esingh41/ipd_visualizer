@@ -29,9 +29,11 @@ single frame, so a one-frame history is normal and not a sign of a truncated fil
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
@@ -45,20 +47,192 @@ MU_DECIMALS = 6
 # Name used for a file that predates the model axis and stores a bare ``mu_history``.
 LEGACY_MODEL = "history"
 
-# The SAPT induction benchmark for a geometry, shown as the reference the models are read
-# against. The last three sum to the first, so they are ordered total-first and kept
-# together. These describe the *geometry*, not a dipole model, which is why they are
-# displayed in their own group rather than mixed in with the per-model energies.
+@dataclass(frozen=True)
+class ReferenceLevel:
+    """One level of theory's induction benchmark, and the columns it is read from.
+
+    ``total`` is the induction energy the dipole models are trying to reproduce.
+    ``components`` is its decomposition where the source provides one -- SAPT0 gives all
+    three, SAPT2+/aDZ gives none -- so a level with an empty breakdown is normal and not a
+    truncated declaration.
+
+    Only induction is taken. The other SAPT terms describe the same geometry but belong on a
+    different axis: at 0.70 Re the Na-benzene Elst is -32 and Exch is +77 kcal/mol, which on
+    an induction plot would flatten every curve worth reading.
+    """
+
+    name: str
+    total: Tuple[str, str]
+    components: Tuple[Tuple[str, str], ...] = ()
+
+    @property
+    def terms(self) -> Tuple[Tuple[str, str], ...]:
+        """Total first, then its breakdown -- the order the UI displays them in."""
+        return (self.total,) + self.components
+
+
+# Every induction benchmark this app knows how to read, in display order. Each level is named
+# after what its columns literally say: the unqualified ``SAPT0 IND kcalmol`` family does not
+# record its basis set anywhere, so it is called "SAPT0" rather than guessed at.
 #
-# Declared here rather than in scripts/build_ipd_dataset.py because both the offline
-# converter and the on-demand catalog need the same four column names, and a second copy
-# would eventually disagree with this one.
-SAPT_INDUCTION_ENERGIES = (
-    ("Induction total", "SAPT0 IND kcalmol"),
-    ("ind20,r", "SAPT ind20,r kcalmol"),
-    ("exch-ind20,r", "SAPT exch-ind20,r kcalmol"),
-    ("δHF", "SAPT dHF ind kcalmol"),
+# Detected, never declared per dataset: a source carries a level when it carries that level's
+# total column, and every level it carries is emitted. That is what lets an uploaded
+# dataframe with only SAPT2+ columns show a reference without any hand-configuration.
+#
+# Declared here rather than in scripts/build_ipd_dataset.py because both the offline converter
+# and the on-demand catalog read them, and a second copy would eventually disagree.
+REFERENCE_LEVELS: Tuple[ReferenceLevel, ...] = (
+    ReferenceLevel("SAPT2+/aDZ", ("Induction total", "SAPT2+/aDZ Ind")),
+    ReferenceLevel(
+        "SAPT0",
+        ("Induction total", "SAPT0 IND kcalmol"),
+        (
+            ("ind20,r", "SAPT ind20,r kcalmol"),
+            ("exch-ind20,r", "SAPT exch-ind20,r kcalmol"),
+            ("δHF", "SAPT dHF ind kcalmol"),
+        ),
+    ),
+    ReferenceLevel(
+        "SAPT0/cc-pVDZ",
+        ("Induction total", "SAPT0/cc-pVDZ IND kcalmol"),
+        (
+            ("ind20,r", "SAPT/cc-pVDZ ind20,r kcalmol"),
+            ("exch-ind20,r", "SAPT/cc-pVDZ exch-ind20,r kcalmol"),
+            ("δHF", "SAPT/cc-pVDZ dHF ind kcalmol"),
+        ),
+    ),
 )
+
+
+def _finite_float(row, column: str) -> Optional[float]:
+    """``row[column]`` as a finite float, or None if it is absent or unusable."""
+    try:
+        value = float(row[column])
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
+    return value if np.isfinite(value) else None
+
+
+def reference_energies(row) -> List[Dict[str, Any]]:
+    """Every induction benchmark a row carries, across all levels of theory.
+
+    Returns ``[{"level", "label", "kcalmol", "is_total"}]``, each level total-first. These
+    describe the *geometry*, not a dipole model, which is why they are displayed in their own
+    group rather than mixed in with the per-model energies.
+
+    A level appears only when its **total** is present: a breakdown with no total is not a
+    benchmark to read against. Missing components are simply omitted, so a source with a
+    total and nothing else is a first-class reference rather than a degraded one.
+    """
+    energies: List[Dict[str, Any]] = []
+    for level in REFERENCE_LEVELS:
+        if _finite_float(row, level.total[1]) is None:
+            continue
+        for label, column in level.terms:
+            value = _finite_float(row, column)
+            if value is None:
+                continue
+            energies.append(
+                {
+                    "level": level.name,
+                    "label": label,
+                    "kcalmol": round(value, 6),
+                    # Carried rather than inferred from the label: the plot tab draws any
+                    # series it cannot identify as a dashed component, which is exactly how a
+                    # total-only level would otherwise be mis-drawn.
+                    "is_total": column == level.total[1],
+                }
+            )
+    return energies
+
+
+# --- separation --------------------------------------------------------------
+
+# The trailing token of ``01_Na-Water_1.05`` / ``131_Na-benzene_0.70``. Read as a multiple of
+# the equilibrium separation, which is what the S66x8 and ion-water conventions mean by it.
+SEPARATION_TOKEN = re.compile(r"[_-](\d+(?:\.\d+)?)$")
+
+# Columns that state the separation outright, most meaningful first. An explicit column always
+# wins over the id suffix: a dataset whose suffix means something else would be mislabelled.
+SEPARATION_COLUMNS = ("eq_ratio", "separation")
+
+# How each source is reported once chosen. "contact" is a real distance rather than a ratio,
+# so it is labelled and unit-stamped as one -- the previous code stamped a distance column's
+# value as "Re", which read as a ratio fourteen times too large.
+_SEPARATION_STYLE = {
+    "column": ("Re", "{:.2f} Re"),
+    "system_id": ("Re", "{:.2f} Re"),
+    "contact": ("angstrom", "{:.3f} Å"),
+}
+
+
+def separation_from_system_id(system_id: str) -> Optional[float]:
+    """The separation encoded in a ``system_id``'s trailing token, if it has one."""
+    match = SEPARATION_TOKEN.search(str(system_id))
+    return float(match.group(1)) if match else None
+
+
+def _separation_candidates(record: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """What each source would say about one geometry."""
+    row = record.get("row")
+    column = None
+    if row is not None:
+        for name in SEPARATION_COLUMNS:
+            column = _finite_float(row, name)
+            if column is not None:
+                break
+    return {
+        "column": column,
+        "system_id": separation_from_system_id(record.get("system_id", "")),
+        "contact": record.get("contact_ang"),
+    }
+
+
+def derive_separations(records: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Give every geometry in **one trajectory** a separation, its units and its label.
+
+    ``records`` are ``{"system_id", "row", "contact_ang"}`` dicts, one per geometry. Returns
+    ``{"separation", "separation_units", "separation_label"}`` in the same order.
+
+    The source is chosen once for the whole trajectory rather than per geometry, and only a
+    source that describes *every* member is eligible. A group that mixed an Re ratio for one
+    geometry with an Angstrom distance for the next would sort into nonsense and animate in
+    the wrong order -- the same rule the plot tab applies to its x-axis, for the same reason.
+
+    Falls through explicit column -> id suffix -> computed closest contact. The last is
+    available for any dimer whose geometry parses, so a dataframe that declares nothing at all
+    still gets an ordered, honestly-labelled scan.
+    """
+    records = list(records)
+    candidates = [_separation_candidates(record) for record in records]
+
+    source = next(
+        (
+            name
+            for name in ("column", "system_id", "contact")
+            if candidates and all(entry[name] is not None for entry in candidates)
+        ),
+        None,
+    )
+    if source is None:
+        return [
+            {
+                "separation": None,
+                "separation_units": None,
+                "separation_label": str(record.get("system_id", "")),
+            }
+            for record in records
+        ]
+
+    units, fmt = _SEPARATION_STYLE[source]
+    return [
+        {
+            "separation": entry[source],
+            "separation_units": units,
+            "separation_label": fmt.format(entry[source]),
+        }
+        for entry in candidates
+    ]
 
 
 class SystemNotFound(LookupError):
@@ -66,6 +240,39 @@ class SystemNotFound(LookupError):
 
     A distinct type so the Flask layer can answer 404 without this module importing Flask.
     """
+
+
+def contact_distance(coords, n_atoms_a: int) -> float | None:
+    """Shortest distance between any atom of monomer A and any atom of monomer B, Angstrom.
+
+    The one separation measure that means the same thing for every dimer. The alternative
+    already in the catalog -- ``separation_alt_label`` -- is fed by a hand-picked
+    ``O-Na dist ang`` / ``O-Cl dist ang`` column that exists only in the ion-water pickles,
+    so it cannot describe an S66x8 system or an uploaded dataset at all.
+
+    All atoms count, hydrogens included: for a hydrogen-bonded dimer the H...O contact *is*
+    the interaction, and skipping it would report the much longer heavy-atom separation.
+
+    ``coords`` must already be in Angstrom and ordered monomer-A-then-monomer-B, which both
+    callers verify before reaching here. Returns None rather than raising when the split is
+    degenerate, so one malformed geometry cannot empty a whole catalog.
+
+    Declared in this module because the offline converter and the on-demand catalog both
+    need it, and a second copy would eventually disagree with this one.
+    """
+    coords = np.asarray(coords, dtype=float)
+    n_atoms_a = int(n_atoms_a)
+    if coords.ndim != 2 or coords.shape[1] != 3:
+        return None
+    if not 0 < n_atoms_a < len(coords):
+        return None
+    if not np.isfinite(coords).all():
+        return None
+
+    # (n_a, n_b) pairwise distances by broadcasting. These are dimers -- a few dozen atoms
+    # at most -- so the full matrix is cheaper than any cleverer approach.
+    deltas = coords[:n_atoms_a, None, :] - coords[None, n_atoms_a:, :]
+    return float(np.linalg.norm(deltas, axis=-1).min())
 
 
 def _build_xyz(symbols, coords, comment: str) -> str:
