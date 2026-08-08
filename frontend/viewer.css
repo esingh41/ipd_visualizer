@@ -1,0 +1,324 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #d6dae0;
+  --text: #1c2530;
+  --muted: #5c6773;
+  --error: #b3261e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.status.error {
+  color: var(--error);
+}
+
+main {
+  display: grid;
+  gap: 1rem;
+  max-width: 60rem;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 14rem;
+  flex: 1;
+}
+
+.field > span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+select,
+input[type="file"] {
+  padding: 0.4rem;
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+select:disabled {
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.viewer-panel {
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* 3Dmol measures its container, so this needs a real height before the viewer is created. */
+.viewer {
+  position: relative;
+  width: 100%;
+  height: 26rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.playback {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+#play-button {
+  width: 2.5rem;
+  padding: 0.35rem 0;
+  font: inherit;
+  line-height: 1;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#play-button:disabled {
+  color: var(--muted);
+  background: var(--bg);
+  cursor: default;
+}
+
+#frame-slider {
+  flex: 1;
+}
+
+.frame-label {
+  min-width: 22rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* --- viewer overlays ------------------------------------------------------ */
+
+.overlays {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.overlays-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-top: 0.35rem;
+}
+
+.overlay-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.35rem 0.75rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.overlay-group legend {
+  padding: 0 0.3rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.swatch-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+/* Keyed to DIPOLE_COLORS in viewer.js -- if one changes, change both. */
+.swatch {
+  width: 0.85rem;
+  height: 0.2rem;
+  border-radius: 1px;
+}
+
+.swatch-monomer {
+  background: #1f77b4;
+}
+
+.swatch-dimer {
+  background: #ff7f0e;
+}
+
+.swatch-delta {
+  background: #9467bd;
+}
+
+.scale-control input[type="range"] {
+  width: 180px;
+}
+
+.scale-readout {
+  min-width: 9.5rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A disabled overlay means this frame carries no such data -- worth showing, not hiding. */
+.swatch-label:has(input:disabled) {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* --- multipoles ---------------------------------------------------------- */
+
+.multipoles {
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.multipoles > summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.multipole-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin: 1rem 0;
+}
+
+.button-group {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.button-group button {
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.button-group button.active {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--muted);
+  font-weight: 600;
+}
+
+.multipole-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* The dipole view is twelve numeric columns; it scrolls inside the panel rather than pushing
+   the page sideways. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+#multipole-table {
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+#multipole-table th,
+#multipole-table td {
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+#multipole-table th {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+#multipole-table th.group {
+  text-align: center;
+  border-bottom: 1px solid var(--muted);
+}
+
+/* Numbers right-align so magnitudes line up column-wise; tabular-nums keeps the digits from
+   shifting as values change between frames. */
+#multipole-table .numeric {
+  text-align: right;
+}
+
+#multipole-table .magnitude,
+#multipole-table .delta {
+  font-weight: 600;
+}
+
+/* A vertical rule at each group boundary, so it stays obvious which x/y/z belongs to which
+   of monomer, dimer and delta. Marked by the renderer rather than by column position, since
+   the scalar and dipole tables have different widths. */
+#multipole-table .group-start,
+#multipole-table th.group + th.group {
+  border-left: 1px solid var(--border);
+}
