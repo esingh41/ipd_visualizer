@@ -16,13 +16,23 @@ uploaded column claiming otherwise would be believed:
 * The closest intermolecular contact is always computed from geometry, so "closest contact
   ang" and per-pair distances like "O-Na dist ang" are ignored.
 
-IPD result columns are not listed here either. ``radius_thole.ipd_column_names`` is the
-source of truth for those; code that needs to detect a stored result asks it directly.
+IPD result columns are not listed here either. ``thole_damping.ipd_column_names`` is the
+source of truth for those; code that needs to detect a stored result asks it directly, via
+``ipd_results``.
+
+``INDUCTION_ENERGY_COLUMNS`` and :func:`classify_energy_column` are the exception to "names
+only" in spirit but not in mechanism: they attach *meaning* to a name -- which family, which
+level of theory, total or component -- so that the browser can group and label curves without
+parsing column strings. Still no dataframe is opened. Turning that vocabulary into a catalog
+and per-frame numbers is ``energies``'s job.
 """
 
-# 2: frames carry a "multipoles" block. Bumping this is what makes an already-stored
-# collection reprocess instead of being returned untouched -- see upload_system.process_upload.
-SCHEMA_VERSION = 2
+# 2: frames carry a "multipoles" block.
+# 3: frames carry an "ipd" block -- per-mode availability and iteration counts.
+# 4: systems carry an "energy_catalog", and frames an "energies" block keyed by energy id.
+# Bumping this is what makes an already-stored collection reprocess instead of being returned
+# untouched -- see upload_system.process_upload.
+SCHEMA_VERSION = 4
 
 REQUIRED_COLUMNS = {
     "qcel_molecule",
@@ -83,13 +93,125 @@ MULTIPOLE_QUANTITIES = {
     },
 }
 
-# Induction totals only. A level is available when its total is present; the optional
-# breakdown terms alongside it are not a gate.
-ENERGY_COLUMNS = {
-    "SAPT2+/aDZ Ind",
-    "SAPT0 IND kcalmol",
-    "SAPT0/cc-pVDZ IND kcalmol",
+# Every energy column the app knows how to plot, keyed by the exact name an upload carries.
+#
+# Values are the scientific metadata the frontend groups, labels and styles by. The point of
+# stating it here is that the browser never has to infer meaning from a column name: it reads
+# `family`, `level` and `role` as fields.
+#
+# `level` is part of a curve's identity, not decoration. The water fixtures carry both SAPT0
+# and SAPT0/cc-pVDZ induction, and both label their total "Induction total" -- keyed on the
+# term alone the two benchmarks would collapse into one curve, silently, with the second
+# level's points appended to the first's.
+#
+# A level is named after what its columns literally say. The unqualified "SAPT0 IND kcalmol"
+# family records no basis set anywhere in the dataframe, so it is called "SAPT0" rather than
+# guessed at as aDZ.
+#
+# `id` is written out rather than derived from the column name: "SAPT ind20,r kcalmol" and
+# "SAPT/cc-pVDZ ind20,r kcalmol" would slug to the same thing, and ten literal strings need no
+# collision handling.
+#
+# Recognition is by exact name, with no "sapt" in name.lower() fallback. A substring rule would
+# sweep in "SAPT0 ELST kcalmol" and "SAPT0 TOTAL kcalmol" -- electrostatics, and a total
+# interaction energy -- both of which are simply wrong curves on an induction axis. An
+# unrecognised column returning None is the safe failure; a misrecognised one is a plausible
+# lie.
+#
+# IPD results are deliberately absent. Their names are thole_damping's to construct, and
+# `energies` builds those catalog entries from ipd_results.MODES instead.
+INDUCTION_ENERGY_COLUMNS = {
+    # SAPT0. Total plus the three terms decomposing it.
+    "SAPT0 IND kcalmol": {
+        "id": "sapt0_ind",
+        "label": "Induction total",
+        "family": "sapt",
+        "level": "SAPT0",
+        "role": "total",
+    },
+    "SAPT ind20,r kcalmol": {
+        "id": "sapt0_ind20r",
+        "label": "ind20,r",
+        "family": "sapt",
+        "level": "SAPT0",
+        "role": "component",
+    },
+    "SAPT exch-ind20,r kcalmol": {
+        "id": "sapt0_exch_ind20r",
+        "label": "exch-ind20,r",
+        "family": "sapt",
+        "level": "SAPT0",
+        "role": "component",
+    },
+    "SAPT dHF ind kcalmol": {
+        "id": "sapt0_dhf",
+        "label": "δHF",
+        "family": "sapt",
+        "level": "SAPT0",
+        "role": "component",
+    },
+
+    # SAPT0/cc-pVDZ. The same four quantities at a second level of theory.
+    "SAPT0/cc-pVDZ IND kcalmol": {
+        "id": "sapt0_ccpvdz_ind",
+        "label": "Induction total",
+        "family": "sapt",
+        "level": "SAPT0/cc-pVDZ",
+        "role": "total",
+    },
+    "SAPT/cc-pVDZ ind20,r kcalmol": {
+        "id": "sapt0_ccpvdz_ind20r",
+        "label": "ind20,r",
+        "family": "sapt",
+        "level": "SAPT0/cc-pVDZ",
+        "role": "component",
+    },
+    "SAPT/cc-pVDZ exch-ind20,r kcalmol": {
+        "id": "sapt0_ccpvdz_exch_ind20r",
+        "label": "exch-ind20,r",
+        "family": "sapt",
+        "level": "SAPT0/cc-pVDZ",
+        "role": "component",
+    },
+    "SAPT/cc-pVDZ dHF ind kcalmol": {
+        "id": "sapt0_ccpvdz_dhf",
+        "label": "δHF",
+        "family": "sapt",
+        "level": "SAPT0/cc-pVDZ",
+        "role": "component",
+    },
+
+    # SAPT2+/aDZ, in 131_Na-benzene.pkl. A total with no breakdown alongside it, which is a
+    # complete benchmark rather than a degraded one -- so it is a `total` and draws solid.
+    "SAPT2+/aDZ Ind": {
+        "id": "sapt2p_adz_ind",
+        "label": "Induction total",
+        "family": "sapt",
+        "level": "SAPT2+/aDZ",
+        "role": "total",
+    },
+
+    # Classical undamped multipole induction. A model, not a benchmark, and it belongs to no
+    # level of theory -- hence `level: None`, which is what keeps it out of the SAPT headings.
+    "mtp ind": {
+        "id": "mtp_ind",
+        "label": "Multipole induction",
+        "family": "mtp",
+        "level": None,
+        "role": "model",
+    },
+    "mtp ind / 2": {
+        "id": "mtp_ind_half",
+        "label": "Multipole induction / 2",
+        "family": "mtp",
+        "level": None,
+        "role": "model",
+    },
 }
+
+# Derived from the map rather than listed again, so the two cannot drift. Used by
+# feature_availability and KNOWN_COLUMNS; a level is available when any of these is present.
+ENERGY_COLUMNS = frozenset(INDUCTION_ENERGY_COLUMNS)
 
 # system_id is optional: without it every row is its own single-frame system, so only the
 # "trajectory" feature is lost, not the upload.
@@ -124,7 +246,7 @@ FEATURE_REQUIREMENTS = {
     },
 
     # The monomer inputs an IPD run reads. Column presence only -- whether apnet_pt is
-    # installed is a separate question, answered by ipd_compute.capability(). Independent
+    # installed is a separate question, answered by capability.capability(). Independent
     # of mbis_charges: that needs the dimer column, this does not.
     "ipd_computable": {
         "q hf/adz A",
@@ -157,6 +279,28 @@ def rename_map(columns):
         name: canonical_name(name)
         for name in columns
         if canonical_name(name) != name
+    }
+
+
+def classify_energy_column(name):
+    """The scientific metadata for a recognised energy column, or None for anything else.
+
+    None means "not an energy this app plots", which covers the overwhelming majority of
+    columns -- including energies it deliberately does not plot yet, such as electrostatics
+    and total interaction energies.
+
+    ``category`` is carried on every entry even though only one value exists today. It is what
+    lets a later electrostatics tab filter the same catalog without a second metadata scheme.
+    """
+    name = canonical_name(name)
+    entry = INDUCTION_ENERGY_COLUMNS.get(name)
+    if entry is None:
+        return None
+    return {
+        "source_column": name,
+        "category": "induction",
+        "units": "kcal/mol",
+        **entry,
     }
 
 

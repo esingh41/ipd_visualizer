@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backend.services import dataframe_schema, system_processing
+from backend.services import dataframe_schema, energies, ipd_results, system_processing
 
 COLLECTIONS_DIR = Path(__file__).resolve().parents[2] / "data" / "systems"
 
@@ -206,8 +206,21 @@ def _multipole_arrays(row, n_atoms, n_atoms_A):
     return multipoles
 
 
-def _frame_payload(frame, row):
-    """One frame of a trajectory, as the frontend receives it."""
+def _frame_payload(df, frame, *, ipd_computable, energy_catalog):
+    """One frame of a trajectory, as the frontend receives it.
+
+    Takes the whole dataframe rather than just the row because IPD availability is read
+    through ``thole_damping``'s label-based accessors. ``frame["row_index"]`` is a *position*
+    -- ``group_trajectories`` assigns it by enumerating rows -- so it is converted to a label
+    once, here, rather than the two being assumed equal.
+
+    ``energy_catalog`` is built once per collection and passed down rather than derived here:
+    every frame must report the same set of energy ids, or a curve would appear and disappear
+    along a single trajectory.
+    """
+    row_label = df.index[frame["row_index"]]
+    row = df.loc[row_label]
+
     payload = {
         "row_index": int(frame["row_index"]),
         "system_id": frame["system_id"],
@@ -217,6 +230,10 @@ def _frame_payload(frame, row):
         "separation_label": frame["separation_label"],
         "contact_distance_ang": _jsonable(row.get(system_processing.CONTACT_COLUMN)),
         "eq_ratio": _jsonable(row.get(system_processing.EQ_RATIO_COLUMN)),
+        # Outside the geometry branch below on purpose: an energy is a property of the row,
+        # not of whether its molecule parsed, so a frame with unreadable geometry still
+        # reports the energies it has.
+        "energies": energies.frame_energies(row, energy_catalog),
     }
 
     geometry = system_processing.geometry_fields(row.get("qcel_molecule"))
@@ -227,9 +244,10 @@ def _frame_payload(frame, row):
         payload.update(
             {"symbols": None, "n_atoms": None, "n_atoms_A": None, "coords": None, "xyz": None}
         )
-        # No atom count to validate multipole lengths against, so there is nothing that can
-        # be emitted honestly.
+        # No atom count to validate multipole lengths or induced-dipole histories against, so
+        # there is nothing either can emit honestly.
         payload["multipoles"] = None
+        payload["ipd"] = None
     else:
         payload.update(
             {
@@ -242,6 +260,17 @@ def _frame_payload(frame, row):
         )
         payload["multipoles"] = _multipole_arrays(
             row, int(geometry["n_atoms"]), int(geometry["n_atoms_A"])
+        )
+        # Availability and iteration counts only. The histories themselves are lazy-loaded per
+        # frame and mode: a run that hits the SCF iteration cap is ~150 KB on its own, and
+        # inlining every one of them would scale the trajectory payload by
+        # frames x modes x iterations x atoms.
+        payload["ipd"] = ipd_results.frame_ipd_metadata(
+            df,
+            row_label,
+            n_atoms=int(geometry["n_atoms"]),
+            n_atoms_A=int(geometry["n_atoms_A"]),
+            computable=ipd_computable,
         )
     return payload
 
@@ -261,13 +290,22 @@ def save_collection(
     directory = collection_dir(collection_id)
     features = dataframe_schema.feature_availability(df.columns)
     columns = {dataframe_schema.canonical_name(name) for name in df.columns}
+    # Built once for the whole collection. It describes the dataframe's vocabulary, which every
+    # trajectory in it shares, and passing one object to every frame is what guarantees they
+    # agree on which energies exist.
+    catalog = energies.energy_catalog(df.columns)
     slugs = _unique_slugs(trajectory["name"] for trajectory in trajectories)
 
     systems = []
     for trajectory in trajectories:
         name = trajectory["name"]
         frames = [
-            _frame_payload(frame, df.iloc[frame["row_index"]])
+            _frame_payload(
+                df,
+                frame,
+                ipd_computable=features["ipd_computable"],
+                energy_catalog=catalog,
+            )
             for frame in trajectory["frames"]
         ]
         relative = f"{SYSTEMS_DIRNAME}/{slugs[name]}.json"
@@ -278,6 +316,9 @@ def save_collection(
                 "system": name,
                 "n_frames": len(frames),
                 "features": features,
+                # What every energy in the frames below *means*, stated once. Frames carry
+                # only {id: value}.
+                "energy_catalog": catalog,
                 "frames": frames,
             },
         )

@@ -13,7 +13,8 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from backend.services import trajectory_service, upload_system
+from backend.services import capability, ipd_service, trajectory_service, upload_system
+from backend.services.errors import IpdError
 
 # Dimer dataframes with per-row molecules and multipoles run to a few hundred MB at most.
 # A cap keeps a mistyped upload from being read entirely into memory before it is rejected.
@@ -62,6 +63,13 @@ def create_app() -> Flask:
     def _not_found(exc):
         return jsonify({"error": str(exc)}), 404
 
+    @app.errorhandler(IpdError)
+    def _ipd_error(exc):
+        # Carries its own status: 400 for a bad mode, 404 for nothing computed, 503 when
+        # apnet_pt cannot run here. The body keeps the "error" key every other failure uses,
+        # so one client-side handler reads them all.
+        return jsonify(exc.to_dict()), exc.status
+
     @app.errorhandler(ValueError)
     def _bad_request(exc):
         # collection_dir raises this for an id that would escape data/systems.
@@ -92,4 +100,49 @@ def create_app() -> Flask:
     def get_trajectory(upload_id, slug):
         return jsonify(trajectory_service.get_trajectory(upload_id, slug))
 
+    # --- IPD ----------------------------------------------------------------
+
+    @app.get("/api/ipd/capability")
+    def ipd_capability():
+        # Answers whether the *server* can compute. Whether a given frame has the inputs is a
+        # separate flag, and rides in that frame's "ipd" block.
+        return jsonify(capability.capability())
+
+    @app.get("/api/uploads/<upload_id>/systems/<slug>/frames/<int:frame_index>/ipd")
+    def get_frame_ipd(upload_id, slug, frame_index):
+        # Its own request rather than part of the trajectory payload: one history for a run
+        # that hit the SCF iteration cap is ~150 KB, and there is one per frame per mode.
+        return jsonify(
+            ipd_service.get_history(upload_id, slug, frame_index, _requested_mode())
+        )
+
+    @app.post("/api/uploads/<upload_id>/systems/<slug>/frames/<int:frame_index>/ipd")
+    def compute_frame_ipd(upload_id, slug, frame_index):
+        return jsonify(
+            ipd_service.compute(upload_id, slug, frame_index, _requested_mode())
+        )
+
+    @app.post("/api/uploads/<upload_id>/systems/<slug>/ipd")
+    def compute_system_ipd(upload_id, slug):
+        return jsonify(ipd_service.compute_system(upload_id, slug, _requested_mode()))
+
     return app
+
+
+def _requested_mode():
+    """The damping mode from ``?mode=`` or a JSON body, whichever the request used.
+
+    GET carries it in the query string and POST in the body; the value means the same thing
+    either way, so it is read in one place. Validating it is ``ipd_results``' job -- this only
+    has to find it.
+    """
+    mode = request.args.get("mode")
+    if mode is None and request.is_json:
+        payload = request.get_json(silent=True) or {}
+        mode = payload.get("mode")
+    if not mode:
+        raise IpdError(
+            "missing_ipd_mode",
+            "No IPD damping mode given. Pass ?mode=<id> or a JSON body {\"mode\": \"<id>\"}.",
+        )
+    return mode

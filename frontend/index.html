@@ -3,20 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>IPD Visualizer — Trajectory</title>
+    <title>IPD Visualizer</title>
     <link rel="stylesheet" href="/viewer.css" />
     <!-- Unpinned, matching what index_old.html has always loaded. Pinning this to a
          confirmed release is a follow-up. -->
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+    <!-- Pinned, as index_old.html pins it. "basic" carries scatter, shapes and annotations,
+         which is everything the Plots tab draws. -->
+    <script src="https://cdn.plot.ly/plotly-basic-2.35.2.min.js" charset="utf-8"></script>
     <script type="module" src="/viewer.js"></script>
   </head>
   <body>
     <header>
-      <h1>Trajectory</h1>
+      <h1>IPD Visualizer</h1>
       <p id="status" class="status" role="status"></p>
     </header>
 
     <main>
+      <!-- Above the tabs, and shared by both: there is one collection and one system selected
+           at a time, and switching tabs should not mean re-choosing them. -->
       <section class="controls">
         <label class="field">
           <span>Upload a dataframe</span>
@@ -32,29 +37,169 @@
           <span>System</span>
           <select id="system-select" disabled></select>
         </label>
+
+        <!-- Kept inside the upload controls because it documents the file input, but made a
+             full-width flex item so opening it never squeezes either selector. Native details
+             supplies disclosure state and keyboard semantics without JavaScript. -->
+        <details class="upload-requirements">
+          <summary>Upload requirements</summary>
+          <div class="upload-requirements-content">
+            <p class="requirements-intro">
+              Upload a <code>.pkl</code> or <code>.pickle</code> containing a pandas
+              DataFrame. Column names are case- and space-sensitive; use the exact names
+              below.
+            </p>
+
+            <section class="requirements-section" aria-labelledby="requirements-minimum">
+              <h2 id="requirements-minimum">Minimum</h2>
+              <ul>
+                <li>
+                  The DataFrame must be non-empty and include <code>qcel_molecule</code>.
+                </li>
+                <li>
+                  At least one row must contain a <code>qcelemental.Molecule</code> dimer with
+                  exactly two fragments. Monomer A atoms must come first, contiguously and in
+                  order, followed by monomer B atoms.
+                </li>
+                <li>
+                  <code>system_id</code> is optional. It groups related rows into a trajectory;
+                  without it, each row is shown as a separate single-frame system.
+                </li>
+              </ul>
+            </section>
+
+            <section
+              class="requirements-section requirements-multipoles-section"
+              aria-labelledby="requirements-multipoles"
+            >
+              <h2 id="requirements-multipoles">Atomic multipoles</h2>
+              <p>
+                A and B columns are joined for the isolated-monomer view. The dimer column
+                supplies the in-dimer view; provide all three to also see their difference.
+                Every array must use the same atom order as <code>qcel_molecule</code>.
+              </p>
+
+              <div class="multipole-requirements">
+                <section>
+                  <h3>Charges and charge labels</h3>
+                  <ul class="column-list">
+                    <li><code>q hf/adz A</code></li>
+                    <li><code>q hf/adz B</code></li>
+                    <li><code>q hf/adz dimer</code></li>
+                  </ul>
+                  <p class="shape-note">
+                    One scalar per atom: A <code>(n_A,)</code>, B <code>(n_B,)</code>, and
+                    dimer <code>(n_A + n_B,)</code>.
+                  </p>
+                </section>
+
+                <section>
+                  <h3>Dipole table and overlays</h3>
+                  <ul class="column-list">
+                    <li><code>mu hf/adz A</code></li>
+                    <li><code>mu hf/adz B</code></li>
+                    <li><code>mu hf/adz dimer</code></li>
+                  </ul>
+                  <p class="shape-note">
+                    One 3-vector per atom: A <code>(n_A, 3)</code>, B
+                    <code>(n_B, 3)</code>, and dimer <code>(n_A + n_B, 3)</code>.
+                  </p>
+                </section>
+
+                <section>
+                  <h3>Volume-ratio table</h3>
+                  <ul class="column-list">
+                    <li><code>volume ratios A</code></li>
+                    <li><code>volume ratios B</code></li>
+                    <li><code>volume ratios dimer</code></li>
+                  </ul>
+                  <p class="shape-note">
+                    One scalar per atom: A <code>(n_A,)</code>, B <code>(n_B,)</code>, and
+                    dimer <code>(n_A + n_B,)</code>.
+                  </p>
+                </section>
+              </div>
+            </section>
+
+            <section class="requirements-section" aria-labelledby="requirements-ipd">
+              <h2 id="requirements-ipd">IPD computation</h2>
+              <p>Each row needs all eight isolated-monomer input columns:</p>
+              <ul class="ipd-column-list column-list">
+                <li><code>q hf/adz A</code></li>
+                <li><code>q hf/adz B</code></li>
+                <li><code>mu hf/adz A</code></li>
+                <li><code>mu hf/adz B</code></li>
+                <li><code>theta hf/adz A</code></li>
+                <li><code>theta hf/adz B</code></li>
+                <li><code>volume ratios A</code></li>
+                <li><code>volume ratios B</code></li>
+              </ul>
+              <p>
+                These are per-monomer arrays in atom order: charges and volume ratios contain
+                one scalar per atom, dipoles one 3-vector, and quadrupoles one
+                <code>3 &times; 3</code> tensor. Dimer columns are not required for IPD.
+                Computation also requires a compatible <code>apnet_pt</code> installation on
+                the server; volume ratios alone are not sufficient.
+              </p>
+            </section>
+          </div>
+        </details>
       </section>
 
-      <section class="viewer-panel">
-        <div id="viewer" class="viewer"></div>
+      <!-- aria-selected is the single source of truth for which tab is active -- no parallel
+           class for JavaScript to keep in step with it. -->
+      <nav class="tab-bar" role="tablist" aria-label="Sections">
+        <button
+          id="tab-trajectory"
+          class="tab"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="panel-trajectory"
+        >
+          Trajectory
+        </button>
+        <button
+          id="tab-plots"
+          class="tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-plots"
+          tabindex="-1"
+        >
+          Plots
+        </button>
+      </nav>
 
-        <div class="playback">
-          <button id="play-button" type="button" disabled aria-label="Play">▶</button>
-          <input
-            id="frame-slider"
-            type="range"
-            min="0"
-            max="0"
-            value="0"
-            step="1"
-            disabled
-            aria-label="Frame"
-          />
-          <span id="frame-label" class="frame-label"></span>
+      <section
+        id="panel-trajectory"
+        class="panel-stack"
+        role="tabpanel"
+        aria-labelledby="tab-trajectory"
+      >
+      <section class="viewer-panel">
+        <!-- The canvas and the two things that address it by frame. Wrapped so the panel has
+             two flex children -- this column and the overlay sidebar -- rather than four
+             stacked ones. -->
+        <div class="viewer-main">
+          <div id="viewer" class="viewer"></div>
+
+          <!-- One dot per physical geometry. Each has exactly one meaning: select this frame. -->
+          <div id="frame-timeline" class="timeline" role="group" aria-label="Trajectory"></div>
+
+          <div class="playback">
+            <button id="play-button" type="button" disabled aria-label="Play">▶</button>
+            <span id="frame-label" class="frame-label"></span>
+          </div>
         </div>
 
         <!-- These change what is drawn in 3D, so they live with the viewer rather than in the
-             multipole table below it. -->
-        <div class="overlays">
+             multipole table below it. Beside it rather than beneath: the controls are short and
+             the canvas is wide, so stacking them wasted the room to the right and pushed the
+             panels below further down. `overlays-side` is what makes it a column -- the IPD
+             panel keeps the plain stacked `.overlays`. -->
+        <div class="overlays overlays-side">
           <span class="overlays-title">Viewer overlays</span>
 
           <fieldset class="overlay-group">
@@ -81,6 +226,12 @@
               <option value="dimer">Dimer</option>
               <option value="delta">Difference</option>
             </select>
+          </fieldset>
+
+          <fieldset class="overlay-group scale-control">
+            <legend>Arrow scale</legend>
+            <input id="arrow-scale" type="range" min="0.1" max="5" step="0.1" value="1" />
+            <span id="arrow-scale-readout" class="scale-readout">1.0&times;</span>
           </fieldset>
         </div>
       </section>
@@ -113,6 +264,70 @@
           </div>
         </div>
       </details>
+
+      <!-- IPD is a secondary analysis of the selected frame, with its own viewer: the main one
+           already carries monomer, dimer and Δ MBIS dipoles plus charge labels, and induced
+           dipoles on top of that would be unreadable. -->
+      <details id="ipd-section" class="ipd">
+        <summary>IPD</summary>
+
+        <p id="ipd-message" class="ipd-message" hidden></p>
+
+        <div id="ipd-controls" class="ipd-controls" hidden>
+          <label class="ipd-field">
+            <span>Damping mode</span>
+            <select id="ipd-mode"></select>
+          </label>
+          <button id="ipd-compute" type="button">Compute IPD</button>
+          <button id="ipd-compute-all" type="button">Compute for all frames</button>
+        </div>
+
+        <div id="ipd-display" hidden>
+          <!-- One dot per SCF step, or a range input past MAX_DOTS. Both call
+               selectIpdIteration; geometry never changes here. -->
+          <div id="ipd-timeline" class="timeline" role="group" aria-label="IPD iteration"></div>
+
+          <div id="ipd-viewer" class="viewer"></div>
+
+          <div class="playback">
+            <button id="ipd-play" type="button" aria-label="Play IPD">▶</button>
+            <span id="ipd-iteration-label" class="frame-label"></span>
+          </div>
+
+          <div class="overlays">
+            <fieldset class="overlay-group scale-control">
+              <legend>IPD arrow scale</legend>
+              <input id="ipd-arrow-scale" type="range" min="0.1" max="5" step="0.1" value="1" />
+              <span id="ipd-arrow-scale-readout" class="scale-readout">1.0&times;</span>
+            </fieldset>
+          </div>
+        </div>
+      </details>
+      </section>
+
+      <section
+        id="panel-plots"
+        class="plot-shell"
+        role="tabpanel"
+        aria-labelledby="tab-plots"
+        hidden
+      >
+        <section class="plot-panel">
+          <!-- The tab is "Plots" because more categories are coming; this heading names the
+               one category it draws today. -->
+          <h2>Induction</h2>
+          <div id="plot-chart"></div>
+        </section>
+
+        <section class="plot-controls">
+          <!-- HTML declares where the curves go; plots.js decides which curves exist, from
+               the payload's energy_catalog. -->
+          <fieldset id="plot-curves" class="plot-curve-list">
+            <legend>Curves</legend>
+          </fieldset>
+          <p id="plot-status" class="status"></p>
+        </section>
+      </section>
     </main>
   </body>
 </html>

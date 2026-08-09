@@ -5,6 +5,31 @@
   --text: #1c2530;
   --muted: #5c6773;
   --error: #b3261e;
+
+  /* Curve colours for the Plots tab, on two independent channels.
+
+     Colour = which family of energy, following the conventional SAPT decomposition scheme so
+              the plot reads the way the literature does.
+     Dash   = total vs breakdown: a total is solid, its components are dashed or dotted. Set
+              in plots.js, since Plotly owns line style.
+
+     Only induction is drawn today; the other three are here so an electrostatics category
+     needs no new colours. Red stays reserved for electrostatics. */
+  --sapt-elst: #c0392b; /* electrostatics -- red    */
+  --sapt-exch: #2e7d32; /* exchange       -- green  */
+  --sapt-ind: #1f5fa8;  /* induction      -- blue   */
+  --sapt-disp: #c99700; /* dispersion     -- yellow */
+
+  /* IPD curves are this app's own predictions, not benchmarks, so they get a family of their
+     own rather than a shade of blue -- the comparison is only readable if the two are never
+     confusable. */
+  --ipd-1: #3d1a5c;
+  --ipd-2: #6b2f96;
+  --ipd-3: #9a55c4;
+  --ipd-4: #bf00bf;
+
+  /* Any other model family, so one that this CSS has never heard of still draws. */
+  --model-other: #4a6b70;
 }
 
 * {
@@ -42,10 +67,15 @@ h1 {
   color: var(--error);
 }
 
+/* 78rem rather than 60rem because the viewer panel now puts its controls beside the canvas
+   instead of beneath it. At 60rem the split would have cost the canvas ~270px; at 78rem it
+   keeps the width it had as a full-width block and the sidebar occupies room that was empty.
+   The plot and multipole panels get the extra width too, which suits the 12-column dipole
+   table that currently scrolls inside .table-scroll. */
 main {
   display: grid;
   gap: 1rem;
-  max-width: 60rem;
+  max-width: 78rem;
 }
 
 .controls {
@@ -56,6 +86,184 @@ main {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+/* Full-width second row of the upload controls. Keeping the disclosure in this card makes its
+   relationship to the file input clear, while flex-basis prevents the open documentation from
+   narrowing the collection and system selectors above it. */
+.upload-requirements {
+  flex: 1 0 100%;
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.upload-requirements > summary {
+  width: fit-content;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.upload-requirements > summary:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+
+.upload-requirements-content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem 1.5rem;
+  padding-top: 0.8rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.requirements-intro,
+.requirements-section p {
+  margin: 0;
+}
+
+.requirements-intro,
+.requirements-section {
+  grid-column: 1 / -1;
+}
+
+.requirements-section {
+  min-width: 0;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.requirements-section h2,
+.requirements-section h3 {
+  color: var(--text);
+}
+
+.requirements-section h2 {
+  margin: 0 0 0.45rem;
+  font-size: 1rem;
+}
+
+.requirements-section h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.requirements-section ul {
+  margin: 0.45rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.requirements-section li + li {
+  margin-top: 0.25rem;
+}
+
+.upload-requirements code {
+  padding: 0.05rem 0.25rem;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+
+.multipole-requirements {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.multipole-requirements > section {
+  min-width: 0;
+  padding: 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.column-list {
+  list-style: none;
+  padding-left: 0 !important;
+}
+
+.shape-note {
+  margin-top: 0.6rem !important;
+}
+
+.ipd-column-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.7rem !important;
+}
+
+@media (max-width: 760px) {
+  .upload-requirements-content,
+  .multipole-requirements {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 420px) {
+  .ipd-column-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- tabs ----------------------------------------------------------------- */
+
+.tab-bar {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  padding: 0.5rem 1rem;
+  font: inherit;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+/* aria-selected is the single source of truth for which tab is active, so the styling reads
+   it directly rather than a class that would have to be kept in step. */
+.tab[aria-selected="true"] {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--text);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+/* The trajectory panel replaced three direct children of `main`, so it has to reproduce the
+   grid they were spaced by. */
+.panel-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+/* Load-bearing. `hidden` hides an element through the UA rule `[hidden] { display: none }`,
+   which *any* author `display` beats -- and both panels set one. Without this the inactive
+   panel stays on screen under the active one, and plots.js's hidden-panel guard, which asks
+   whether the chart is inside `[hidden]` and has a size, answers yes either way. */
+.panel-stack[hidden],
+.plot-shell[hidden] {
+  display: none;
 }
 
 .field {
@@ -88,11 +296,24 @@ select:disabled {
   background: var(--bg);
 }
 
+/* Two columns: the canvas and its frame controls on the left, the overlay switches on the
+   right. align-items defaults to stretch, which is what runs the sidebar's dividing rule the
+   full height of the panel. */
 .viewer-panel {
+  display: flex;
+  gap: 1rem;
   padding: 1rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+/* min-width: 0 is load-bearing. A flex item defaults to min-width: auto, which refuses to
+   shrink below its content -- the canvas would hold its width and push the sidebar out of the
+   panel instead of sharing the row. */
+.viewer-main {
+  flex: 1;
+  min-width: 0;
 }
 
 /* 3Dmol measures its container, so this needs a real height before the viewer is created. */
@@ -141,6 +362,77 @@ select:disabled {
   font-size: 0.9rem;
 }
 
+/* --- timelines ------------------------------------------------------------ */
+
+/* Shared by the trajectory (physical geometry) and the IPD panel (SCF iteration). The two
+   mean different things -- see the IPD section -- but a dot is a dot. */
+.timeline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 0.7rem;
+  min-height: 1.6rem;
+}
+
+/* The connecting rule between dots. */
+.timeline-dot + .timeline-dot::before {
+  content: "";
+  display: block;
+  width: 0.85rem;
+  height: 2px;
+  background: var(--border);
+  margin-right: 0.15rem;
+}
+
+.timeline-dot {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0;
+  margin: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.timeline-dot::after {
+  content: "";
+  display: block;
+  width: 0.72rem;
+  height: 0.72rem;
+  margin-left: 0.15rem;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  background: var(--panel);
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+
+.timeline-dot:hover::after {
+  background: var(--muted);
+  transform: scale(1.15);
+}
+
+.timeline-dot[aria-current="true"]::after {
+  background: var(--text);
+  border-color: var(--text);
+  transform: scale(1.3);
+}
+
+.timeline-dot:focus-visible {
+  outline: none;
+}
+
+.timeline-dot:focus-visible::after {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+/* Fallback past MAX_DOTS: an SCF that ran to the 200-iteration cap is 201 dots, which is not
+   a timeline any more. */
+.timeline-range {
+  width: 100%;
+}
+
 /* --- viewer overlays ------------------------------------------------------ */
 
 .overlays {
@@ -151,6 +443,36 @@ select:disabled {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
   border-top: 1px solid var(--border);
+}
+
+/* The sidebar variant, used by the main viewer only. A fixed column rather than a flexible
+   one: these controls have a natural width, and letting them stretch would only take room
+   from the canvas, which is the thing that benefits from it.
+
+   The IPD panel keeps the plain .overlays above -- it holds a single slider, so a column
+   there would be mostly empty. */
+.overlays-side {
+  flex: 0 0 16rem;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  margin-top: 0;
+  padding: 0 0 0 1rem;
+  border-top: none;
+  border-left: 1px solid var(--border);
+}
+
+/* Stacked in a narrow column, so the groups fill it and their contents run down rather than
+   wrapping mid-row. */
+.overlays-side .overlay-group {
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.overlays-side .overlay-group select,
+.overlays-side input[type="range"] {
+  width: 100%;
 }
 
 .overlays-title {
@@ -221,6 +543,88 @@ select:disabled {
 .swatch-label:has(input:disabled) {
   color: var(--muted);
   opacity: 0.6;
+}
+
+/* --- IPD ------------------------------------------------------------------ */
+
+.ipd {
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ipd > summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ipd-message {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.ipd-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.ipd-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.ipd-field > span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ipd-controls button {
+  padding: 0.45rem 0.9rem;
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ipd-controls button:disabled {
+  color: var(--muted);
+  background: var(--bg);
+  cursor: default;
+}
+
+/* The IPD viewer is shorter than the main one: it shows the same geometry at a fixed camera,
+   and the panel already carries a timeline above it and playback below. */
+#ipd-viewer {
+  height: 20rem;
+  margin-top: 0.75rem;
+}
+
+#ipd-play {
+  width: 2.5rem;
+  padding: 0.35rem 0;
+  font: inherit;
+  line-height: 1;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#ipd-play:disabled {
+  color: var(--muted);
+  background: var(--bg);
+  cursor: default;
 }
 
 /* --- multipoles ---------------------------------------------------------- */
@@ -321,4 +725,175 @@ select:disabled {
 #multipole-table .group-start,
 #multipole-table th.group + th.group {
   border-left: 1px solid var(--border);
+}
+
+/* --- plots ---------------------------------------------------------------- */
+
+.plot-shell {
+  display: grid;
+  gap: 1rem;
+  align-items: start;
+}
+
+/* `main` caps at 60rem, so the chart and the curve list only fit side by side at exactly that
+   width: 21rem of controls beside the rest. Below it they stack. */
+@media (min-width: 60rem) {
+  .plot-shell {
+    grid-template-columns: minmax(0, 1fr) 21rem;
+  }
+}
+
+.plot-panel,
+.plot-controls {
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.plot-panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* An empty div is zero pixels tall and Plotly sizes itself to its container, so without an
+   explicit height the chart renders invisibly. */
+#plot-chart {
+  width: 100%;
+  min-height: 26rem;
+  height: 50vh;
+  max-height: 640px;
+}
+
+/* --- curve selector ------------------------------------------------------- */
+
+/* A fieldset ships with a border, margin and padding no other element has. Reset them, then
+   style it like the rest of the sidebar. */
+.plot-curve-list {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.plot-curve-list legend {
+  padding: 0;
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Group heading within the list -- "SAPT0 reference" / "IPD". Built from the payload's
+   family and level, so a family this stylesheet has never heard of still gets one. */
+.plot-curve-group {
+  margin: 0.5rem 0 0.15rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.plot-curve-group:first-of-type {
+  margin-top: 0;
+}
+
+.plot-curve {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.plot-curve input {
+  flex: none;
+}
+
+/* Colour chip so each row reads as the curve it controls. plots.js sets only `color`;
+   everything else derives from it, so the chip cannot drift out of step with the line Plotly
+   draws. Components use a dashed chip to mirror their dashed line -- a repeating gradient
+   rather than a border-style, which does not read at this size. */
+.plot-curve-swatch {
+  flex: none;
+  width: 1.1rem;
+  height: 0.2rem;
+  border-radius: 999px;
+  color: var(--muted);
+  background-color: currentColor;
+}
+
+/* background-color must go transparent, or it fills the gaps the gradient just cut and the
+   dash renders solid. */
+.plot-curve-swatch[data-dash="dash"],
+.plot-curve-swatch[data-dash="dot"],
+.plot-curve-swatch[data-dash="dashdot"] {
+  border-radius: 0;
+  background-color: transparent;
+}
+
+.plot-curve-swatch[data-dash="dash"] {
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 4px,
+    transparent 4px 7px
+  );
+}
+
+.plot-curve-swatch[data-dash="dot"] {
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.plot-curve-swatch[data-dash="dashdot"] {
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 5px,
+    transparent 5px 8px,
+    currentColor 8px 10px,
+    transparent 10px 13px
+  );
+}
+
+#plot-status {
+  margin-top: 0.75rem;
+}
+
+/* --- narrow screens -------------------------------------------------------- */
+
+/* Below this the two-column viewer panel stops paying: the canvas would drop under ~600px
+   to keep a 256px sidebar beside it. Revert to the stacked arrangement, which is what this
+   panel did before the sidebar existed. */
+@media (max-width: 60rem) {
+  .viewer-panel {
+    display: block;
+  }
+
+  .overlays-side {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+    padding: 0.75rem 0 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .overlays-side .overlay-group {
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .overlays-side .overlay-group select,
+  .overlays-side input[type="range"] {
+    width: auto;
+  }
 }

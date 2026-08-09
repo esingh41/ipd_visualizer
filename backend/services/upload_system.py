@@ -4,6 +4,8 @@ The orchestration layer, and the only place that knows the order of the pipeline
 
     raw bytes
       -> collection_id_for          content hash, so the same file re-opens the same collection
+      -> (stored at this schema?    return it untouched)
+      -> (stored at an older one?   _reserialize from processed.pkl, keeping computed results)
       -> load_uploaded_dataframe    unpickled exactly once
       -> normalize_columns          aliases to canonical names
       -> validate                   structured report
@@ -97,13 +99,47 @@ def load_uploaded_dataframe(raw):
     return df
 
 
+def _reserialize(collection_id, stored):
+    """Rewrite a stale-schema collection from ``processed.pkl``, or None if that is not there.
+
+    The reason a schema bump does not simply fall through to reprocessing the upload: results
+    computed *since* registration live in ``processed.pkl`` and in no uploaded file. Re-reading
+    the bytes the user just handed over would silently discard every IPD run they have paid
+    for -- with no error, and nothing afterwards to say it happened.
+
+    ``add_derived_columns`` is deliberately not re-run, for the reason ``ipd_service._persist``
+    documents: the stored frame already carries its output, and re-running it is the one way a
+    contact distance could be recomputed from a geometry that has since been normalized.
+
+    Returns None rather than raising when the pickle is missing or unreadable, leaving the
+    caller to fall back to a full reprocess -- a stale collection is worth rescuing, but not at
+    the cost of refusing an upload that would otherwise work.
+    """
+    try:
+        df = system_serialization.load_processed(collection_id)
+    except (OSError, ValueError, EOFError, AttributeError, ImportError):
+        return None
+
+    return system_serialization.save_collection(
+        collection_id,
+        df,
+        system_processing.group_trajectories(df),
+        source_filename=stored["source_filename"],
+        display_name=stored.get("display_name"),
+        validation=stored.get("validation"),
+    )
+
+
 def process_upload(raw, filename):
     """Register an uploaded dataframe and return its manifest.
 
     Idempotent by content: the same bytes give the same ``collection_id``, and an already
-    stored collection is returned untouched rather than rewritten. A stored collection whose
-    ``schema_version`` no longer matches is reprocessed, which is what makes a schema bump
-    take effect.
+    stored collection is returned untouched rather than rewritten.
+
+    Three outcomes, not two. A stored collection at the current ``schema_version`` is returned
+    as it stands; one at an older version is **re-serialized from its own ``processed.pkl``**,
+    which is what makes a schema bump take effect without throwing away computed results; and
+    anything not stored at all is processed from the uploaded bytes.
 
     Raises :class:`UploadError` when there is nothing worth storing -- an unreadable file, no
     geometry column, or no row carrying a usable geometry.
@@ -113,7 +149,10 @@ def process_upload(raw, filename):
         stored = system_serialization.load_manifest(collection_id)
         if stored.get("schema_version") == dataframe_schema.SCHEMA_VERSION:
             return stored
-    except (FileNotFoundError, ValueError):
+        migrated = _reserialize(collection_id, stored)
+        if migrated is not None:
+            return migrated
+    except (FileNotFoundError, ValueError, KeyError):
         pass
 
     df = load_uploaded_dataframe(raw)
