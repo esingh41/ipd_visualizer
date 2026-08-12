@@ -50,24 +50,34 @@ let showDimerDipoles = false;
 let showDeltaDipoles = false;
 let chargeLabelMode = "none";
 
-// Handles for what this layer drew, so it can clear its own work and nothing else. The IPD
-// layer will keep its own arrays, which is what stops the two from erasing each other.
+// Handles for what each viewer drew, so permanent and induced layers clear only their own work.
 let multipoleShapes = [];
 let chargeLabels = [];
+let ipdMultipoleShapes = [];
+let ipdChargeLabels = [];
 
 // Angstrom per atomic unit, fitted once per trajectory -- see setArrowScale. The slider is a
 // multiplier on top of it, so the automatic fit stays the reference point and "1.0x" always
 // means "longest arrow in this trajectory is DEFAULT_ARROW_LEN".
 let baseArrowScale = 1.0;
 
-// IPD: a secondary analysis of the selected frame, in its own viewer. Everything here is
-// scoped to one physical frame and one damping mode; changing either resets all of it.
+// IPD has its own tab and viewer, but shares the physical frame with Trajectory. Its second
+// axis is the SCF history for one frame and damping mode.
 let ipdViewer = null;
+let ipdShowMonomerDipoles = false;
+let ipdShowDimerDipoles = false;
+let ipdShowDeltaDipoles = false;
+let ipdChargeLabelMode = "none";
 let currentIpdMode = null;
 let currentIpdIteration = 0;
 let ipdPlaybackTimer = null;
 let ipdShapes = [];
 let ipdBaseArrowScale = 1.0;
+let ipdHistoryRequestToken = 0;
+let ipdHistoryGenerations = new Map();
+let ipdIterationMemory = new Map();
+let ipdFailedFrames = new Map();
+let ipdComputeInFlight = false;
 
 const el = (id) => document.getElementById(id);
 
@@ -128,10 +138,8 @@ function stripIntermonomerBonds(model, nAtomsA, nAtoms) {
   return true;
 }
 
-// A WebGL canvas measures its container, and a container inside a closed <details> is 0x0.
-// Resizing to that collapses the canvas, and it stays collapsed once the panel is opened -- so
-// every path that measures has to check first. Ported from molview.js, where the IPD viewer's
-// lazy initialisation is exactly the case that needed it.
+// A WebGL canvas measures its container, and a container inside a hidden tab is 0x0. Resizing
+// to that collapses the canvas, so every path that measures has to check first.
 function isLaidOut(container) {
   return (
     Boolean(container) &&
@@ -186,98 +194,151 @@ function frameLabel(frame) {
   return parts.join("  |  ");
 }
 
-// The single entry point for everything that depends on the selected frame. Energies and the
-// IPD controls attach here too.
+// The single entry point for everything that depends on the selected physical frame. Both tabs
+// address this state; the IPD tab adds an SCF iteration without owning a second frame index.
 function showFrame(index, { resetCamera = false } = {}) {
   const frame = currentTrajectory?.frames[index];
   if (!frame) {
     return;
   }
-  // The physical frame is changing, so anything scoped to the *previous* frame's SCF run is
-  // now meaningless: a running iteration animation, and the iteration index itself.
   stopIpdPlayback();
+  ipdHistoryRequestToken += 1;
   currentFrameIndex = index;
   currentIpdIteration = 0;
 
   renderFrame(frame, { resetCamera });
-  el("frame-label").textContent = frameLabel(frame);
+  const label = frameLabel(frame);
+  el("frame-label").textContent = label;
+  el("ipd-frame-label").textContent = label;
   renderTimelineSelection();
   renderMultipoleSection(frame);
   updateOverlayControls(frame);
   renderMultipoleOverlays(frame);
-
-  // Synchronous, and deliberately: showFrame runs on every playback tick, so anything here
-  // that fetched would fire once per frame per lap. renderIpdSection reads frame.ipd, which
-  // is already in the browser; histories load only on an explicit action.
   renderIpdSection(frame);
-  if (ipdViewer && isIpdSectionOpen()) {
+
+  if (ipdViewer && isIpdTabActive()) {
     renderIpdFrame(frame, { resetCamera });
-    // The history for the new frame is a fetch, so it is deliberately not awaited here and
-    // deliberately not attempted during playback: at 500 ms a frame that would be one request
-    // per frame per lap. Scrubbing by hand loads each frame once and then reads the cache.
+    // Trajectory playback is deliberately not a hidden separation player for the IPD tab.
+    // Manual selection loads once and is guarded against stale frame/mode responses.
     if (playbackTimer === null) {
       guard(() => selectIpdMode(currentIpdMode))();
     }
   }
 }
 
-// Every *user-driven* frame change goes through here: timeline dots today, plot points later.
-// Playback calls showFrame directly instead -- this pauses, so a running animation would stop
-// itself on its first tick.
+// Every user-driven physical-frame change goes through here. Playback calls showFrame directly
+// instead: this path pauses it, which is also what makes the IPD separation timeline manual.
 function selectFrame(index) {
   pausePlayback();
   showFrame(index);
 }
 
 function setTrajectory(trajectory) {
-  // Before anything else: a running timer holds an index into the *previous* frames array,
-  // and the new one may be shorter.
   pausePlayback();
+  stopIpdPlayback();
+  ipdHistoryRequestToken += 1;
 
   currentTrajectory = trajectory;
   currentFrameIndex = 0;
-  // Fixed once per trajectory, before the first frame is drawn.
+  currentIpdIteration = 0;
+  currentIpdMode = null;
+  ipdHistoryGenerations = new Map();
+  ipdIterationMemory = new Map();
+  ipdFailedFrames = new Map();
+  ipdBaseArrowScale = 1.0;
+  currentIpdMode = preferredIpdMode(trajectory.frames[0]);
+
+  // The permanent-dipole fit and the selected-mode IPD fit are both trajectory-wide.
   setArrowScale(trajectory);
+  setIpdArrowScale(trajectory, currentIpdMode);
 
   el("play-button").disabled = trajectory.frames.length < 2;
-  renderTrajectoryTimeline(trajectory);
-
+  renderPhysicalTimelines(trajectory);
   showFrame(0, { resetCamera: true });
 
-  // The same payload, re-sliced by separation instead of by frame. Handed over rather than
-  // re-fetched, so the two tabs cannot be looking at different copies of one system.
+  // Plots re-slices this exact object, so all tabs share one in-memory trajectory.
   plots.setTrajectory(trajectory);
 }
 
-// --- trajectory timeline ----------------------------------------------------
+// --- physical-frame timelines ----------------------------------------------
 
-// A physical geometry per dot. Distinct in meaning from the IPD timeline below, which holds
-// geometry fixed and steps through the SCF -- these change what molecule is on screen.
-function renderTrajectoryTimeline(trajectory) {
-  const timeline = el("frame-timeline");
+const PHYSICAL_TIMELINES = ["frame-timeline", "ipd-separation-timeline"];
+
+function failedIpdFrames(mode) {
+  return ipdFailedFrames.get(mode) ?? new Set();
+}
+
+function ipdFrameState(frame, mode) {
+  const selected = ipdMode(frame, mode);
+  if (failedIpdFrames(mode).has(Number(frame.frame_index))) {
+    return { id: "error", label: "recomputation failed; previous result retained if available" };
+  }
+  if (selected?.problem) {
+    return { id: "error", label: `stored result problem: ${selected.problem}` };
+  }
+  if (selected?.stored) {
+    return selected.converged === false
+      ? { id: "not-converged", label: "computed; SCF did not converge" }
+      : { id: "converged", label: "computed" };
+  }
+  if (frame?.ipd?.computable) {
+    return { id: "missing", label: "not computed" };
+  }
+  return { id: "unavailable", label: "IPD unavailable" };
+}
+
+function renderPhysicalTimeline(timelineId, trajectory) {
+  const timeline = el(timelineId);
   timeline.replaceChildren();
+  const isIpd = timelineId === "ipd-separation-timeline";
 
   trajectory.frames.forEach((frame, index) => {
     const dot = document.createElement("button");
+    const separation = frame.separation_label || `Frame ${index + 1}`;
     dot.type = "button";
     dot.className = "timeline-dot";
     dot.dataset.frame = String(index);
-    // separation_label is formatted server-side with its real units and is never empty.
-    dot.title = frame.separation_label || `Frame ${index + 1}`;
-    dot.setAttribute("aria-label", `Select frame ${index + 1}: ${dot.title}`);
+    dot.title = separation;
+
+    if (isIpd) {
+      const state = ipdFrameState(frame, currentIpdMode);
+      dot.dataset.state = state.id;
+      dot.title = `${separation} — ${state.label}`;
+      dot.setAttribute(
+        "aria-label",
+        `Select separation ${separation}, frame ${index + 1}: ${state.label}`
+      );
+    } else {
+      dot.setAttribute("aria-label", `Select frame ${index + 1}: ${separation}`);
+    }
+
     dot.addEventListener("click", () => selectFrame(index));
     timeline.append(dot);
   });
+}
 
+function renderPhysicalTimelines(trajectory) {
+  for (const timelineId of PHYSICAL_TIMELINES) {
+    renderPhysicalTimeline(timelineId, trajectory);
+  }
   renderTimelineSelection();
 }
 
+function renderIpdSeparationTimeline() {
+  if (currentTrajectory) {
+    renderPhysicalTimeline("ipd-separation-timeline", currentTrajectory);
+    renderTimelineSelection();
+  }
+}
+
 function renderTimelineSelection() {
-  for (const dot of el("frame-timeline").querySelectorAll(".timeline-dot")) {
-    if (Number(dot.dataset.frame) === currentFrameIndex) {
-      dot.setAttribute("aria-current", "true");
-    } else {
-      dot.removeAttribute("aria-current");
+  for (const timelineId of PHYSICAL_TIMELINES) {
+    for (const dot of el(timelineId).querySelectorAll(".timeline-dot")) {
+      if (Number(dot.dataset.frame) === currentFrameIndex) {
+        dot.setAttribute("aria-current", "true");
+      } else {
+        dot.removeAttribute("aria-current");
+      }
     }
   }
 }
@@ -520,9 +581,8 @@ function setAtomFilter(filter) {
 
 // --- viewer overlays --------------------------------------------------------
 
-// What gets drawn *on* the molecule. A separate layer from renderFrame, which stays geometry
-// only, and from the table, which stays numbers only. The IPD arrows will be a fourth layer
-// with its own handles, so the two never clear each other's work.
+// What gets drawn *on* either molecule. Geometry stays separate, the table stays numeric, and
+// each viewer/layer owns its handles so permanent overlays never erase induced IPD arrows.
 
 function deltaDipoles(frame) {
   const dipoles = frame.multipoles?.dipoles;
@@ -572,10 +632,15 @@ function setArrowScale(trajectory) {
     }
   }
   baseArrowScale = largest > 0 ? DEFAULT_ARROW_LEN / largest : 1.0;
-  updateArrowScaleReadout();
+  updatePermanentArrowScaleReadout("arrow-scale", "arrow-scale-readout");
+  updatePermanentArrowScaleReadout(
+    "ipd-multipole-arrow-scale",
+    "ipd-multipole-arrow-scale-readout"
+  );
 }
 
-// Two viewers, two independent sliders, one rule for combining a fitted base with a multiplier.
+// Three independent sliders (permanent dipoles in each viewer, plus induced dipoles), one rule
+// for combining a fitted base with a multiplier.
 function arrowScale(base, sliderId) {
   return base * Number(el(sliderId).value);
 }
@@ -584,12 +649,20 @@ function currentArrowScale() {
   return arrowScale(baseArrowScale, "arrow-scale");
 }
 
+function currentIpdMultipoleArrowScale() {
+  return arrowScale(baseArrowScale, "ipd-multipole-arrow-scale");
+}
+
 // Both numbers, because neither alone is enough: the multiplier says how far from the
 // automatic fit you are, and the absolute scale is what makes an arrow length mean something.
+function updatePermanentArrowScaleReadout(sliderId, readoutId) {
+  const multiplier = Number(el(sliderId).value);
+  const scale = arrowScale(baseArrowScale, sliderId);
+  el(readoutId).textContent = `${multiplier.toFixed(1)}× (${scale.toFixed(1)} Å per a.u.)`;
+}
+
 function updateArrowScaleReadout() {
-  const multiplier = Number(el("arrow-scale").value);
-  el("arrow-scale-readout").textContent =
-    `${multiplier.toFixed(1)}× (${currentArrowScale().toFixed(1)} Å per a.u.)`;
+  updatePermanentArrowScaleReadout("arrow-scale", "arrow-scale-readout");
 }
 
 // Takes its viewer, its scale and the array to record handles in, so one arrow convention
@@ -633,7 +706,7 @@ function formatCharge(value) {
   return value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
 }
 
-function renderChargeLabels(frame, mode) {
+function addChargeLabels(target, frame, mode, sink) {
   const values = chargeValues(frame, mode);
   if (!values) {
     return;
@@ -645,8 +718,8 @@ function renderChargeLabels(frame, mode) {
     if (typeof value !== "number") {
       return;
     }
-    chargeLabels.push(
-      viewer.addLabel(
+    sink.push(
+      target.addLabel(
         formatCharge(value),
         {
           position: { x, y, z },
@@ -670,9 +743,45 @@ function renderChargeLabels(frame, mode) {
   });
 }
 
+function removePermanentOverlays(target, shapes, labels) {
+  shapes.forEach((shape) => target.removeShape(shape));
+  labels.forEach((label) => target.removeLabel(label));
+}
+
+function addPermanentOverlays(
+  target,
+  frame,
+  { monomer, dimer, delta, chargeMode, scale },
+  shapeSink,
+  labelSink
+) {
+  if (!frame?.coords) {
+    return;
+  }
+  for (const [layer, visible] of [
+    ["monomer", monomer],
+    ["dimer", dimer],
+    ["delta", delta],
+  ]) {
+    const vectors = visible ? dipoleVectors(frame, layer) : null;
+    if (vectors) {
+      addDipoleArrows(
+        target,
+        frame.coords,
+        vectors,
+        DIPOLE_COLORS[layer],
+        scale,
+        shapeSink
+      );
+    }
+  }
+  if (chargeMode !== "none") {
+    addChargeLabels(target, frame, chargeMode, labelSink);
+  }
+}
+
 function clearMultipoleOverlays() {
-  multipoleShapes.forEach((shape) => viewer.removeShape(shape));
-  chargeLabels.forEach((label) => viewer.removeLabel(label));
+  removePermanentOverlays(viewer, multipoleShapes, chargeLabels);
   multipoleShapes = [];
   chargeLabels = [];
 }
@@ -682,41 +791,44 @@ function renderMultipoleOverlays(frame) {
     return;
   }
   clearMultipoleOverlays();
-
-  if (frame?.coords) {
-    const layers = [
-      ["monomer", showMonomerDipoles],
-      ["dimer", showDimerDipoles],
-      ["delta", showDeltaDipoles],
-    ];
-    for (const [layer, visible] of layers) {
-      const vectors = visible ? dipoleVectors(frame, layer) : null;
-      if (vectors) {
-        addDipoleArrows(
-          viewer,
-          frame.coords,
-          vectors,
-          DIPOLE_COLORS[layer],
-          currentArrowScale(),
-          multipoleShapes
-        );
-      }
-    }
-    if (chargeLabelMode !== "none") {
-      renderChargeLabels(frame, chargeLabelMode);
-    }
-  }
-
+  addPermanentOverlays(
+    viewer,
+    frame,
+    {
+      monomer: showMonomerDipoles,
+      dimer: showDimerDipoles,
+      delta: showDeltaDipoles,
+      chargeMode: chargeLabelMode,
+      scale: currentArrowScale(),
+    },
+    multipoleShapes,
+    chargeLabels
+  );
   viewer.render();
 }
 
+const OVERLAY_CONTROL_IDS = {
+  trajectory: {
+    monomer: "show-monomer-dipoles",
+    dimer: "show-dimer-dipoles",
+    delta: "show-delta-dipoles",
+    charges: "charge-label-mode",
+  },
+  ipd: {
+    monomer: "ipd-show-monomer-dipoles",
+    dimer: "ipd-show-dimer-dipoles",
+    delta: "ipd-show-delta-dipoles",
+    charges: "ipd-charge-label-mode",
+  },
+};
+
 // A control for data this frame does not have is disabled rather than hidden, so the reason
-// the viewer is empty is visible.
-function updateOverlayControls(frame) {
+// the viewer is empty is visible. Both viewers read the same frame payload.
+function updateOverlayControlSet(frame, ids) {
   const dipoles = frame?.multipoles?.dipoles;
-  el("show-monomer-dipoles").disabled = !dipoles?.monomer;
-  el("show-dimer-dipoles").disabled = !dipoles?.dimer;
-  el("show-delta-dipoles").disabled = !(dipoles?.monomer && dipoles?.dimer);
+  el(ids.monomer).disabled = !dipoles?.monomer;
+  el(ids.dimer).disabled = !dipoles?.dimer;
+  el(ids.delta).disabled = !(dipoles?.monomer && dipoles?.dimer);
 
   const charges = frame?.multipoles?.charges;
   const available = {
@@ -725,9 +837,14 @@ function updateOverlayControls(frame) {
     dimer: Boolean(charges?.dimer),
     delta: Boolean(charges?.monomer && charges?.dimer),
   };
-  for (const option of el("charge-label-mode").options) {
+  for (const option of el(ids.charges).options) {
     option.disabled = !available[option.value];
   }
+}
+
+function updateOverlayControls(frame) {
+  updateOverlayControlSet(frame, OVERLAY_CONTROL_IDS.trajectory);
+  updateOverlayControlSet(frame, OVERLAY_CONTROL_IDS.ipd);
 }
 
 // Toggling an overlay redraws overlays only. Going through showFrame would destroy and rebuild
@@ -752,26 +869,45 @@ function setChargeLabelMode(mode) {
   renderMultipoleOverlays(selectedFrame());
 }
 
+// The IPD copies are intentionally independent: comparisons often need a permanent layer in
+// one viewer while keeping the Trajectory canvas uncluttered.
+function setIpdMonomerDipolesVisible(visible) {
+  ipdShowMonomerDipoles = visible;
+  renderIpdMultipoleOverlays(selectedFrame());
+}
+
+function setIpdDimerDipolesVisible(visible) {
+  ipdShowDimerDipoles = visible;
+  renderIpdMultipoleOverlays(selectedFrame());
+}
+
+function setIpdDeltaDipolesVisible(visible) {
+  ipdShowDeltaDipoles = visible;
+  renderIpdMultipoleOverlays(selectedFrame());
+}
+
+function setIpdChargeLabelMode(mode) {
+  ipdChargeLabelMode = mode;
+  renderIpdMultipoleOverlays(selectedFrame());
+}
+
 // --- IPD --------------------------------------------------------------------
 
-// The second viewer, and the second timeline. The distinction is the whole point of this
-// section: the trajectory timeline changes which molecule is on screen, while the IPD timeline
-// holds geometry fixed and steps through the SCF that ran at that geometry.
-//
-// Induced dipoles are *results*; the MBIS dipoles in the main viewer are inputs. They get
-// different colours and different viewers so the two can never be read as the same quantity.
+// The IPD tab has two named axes. Its separation timeline changes the physical geometry through
+// the shared frame state; its SCF timeline holds that geometry fixed and changes only the
+// induced-dipole iteration. Permanent MBIS input overlays can coexist here for comparison, but
+// remain independently controlled from the Trajectory viewer.
 
 const IPD_ARROW_COLOR = 0xbf00bf; // the induced-dipole colour, kept from the previous frontend
 const IPD_INTERVAL_MS = 200; // faster than the trajectory: an SCF is many more steps
 const MAX_DOTS = 40; // beyond this the timeline degrades to a range input
 
-function isIpdSectionOpen() {
-  return el("ipd-section").open;
+function isIpdTabActive() {
+  return el("tab-ipd").getAttribute("aria-selected") === "true";
 }
 
-// The IPD viewer is created on first open, never at startup. A WebGL canvas measures its
-// container, and a container inside a closed <details> is 0x0 -- creating it there yields a
-// collapsed canvas that stays collapsed after the panel opens.
+// The IPD viewer is created on first tab activation, never at startup. A WebGL canvas measures
+// its container, and a container inside a hidden tab is 0x0.
 function initializeIpdViewer() {
   if (ipdViewer || !isLaidOut(el("ipd-viewer"))) {
     return;
@@ -784,14 +920,45 @@ function initializeIpdViewer() {
   }
 }
 
-// The IPD viewer: fixed geometry, induced-dipole convergence. Cameras are deliberately not
-// synchronized with the main viewer -- independent orientations are simpler and often useful.
+function clearIpdMultipoleOverlays() {
+  if (!ipdViewer) {
+    return;
+  }
+  removePermanentOverlays(ipdViewer, ipdMultipoleShapes, ipdChargeLabels);
+  ipdMultipoleShapes = [];
+  ipdChargeLabels = [];
+}
+
+function renderIpdMultipoleOverlays(frame) {
+  if (!ipdViewer) {
+    return;
+  }
+  clearIpdMultipoleOverlays();
+  addPermanentOverlays(
+    ipdViewer,
+    frame,
+    {
+      monomer: ipdShowMonomerDipoles,
+      dimer: ipdShowDimerDipoles,
+      delta: ipdShowDeltaDipoles,
+      chargeMode: ipdChargeLabelMode,
+      scale: currentIpdMultipoleArrowScale(),
+    },
+    ipdMultipoleShapes,
+    ipdChargeLabels
+  );
+  ipdViewer.render();
+}
+
+// The IPD viewer owns fixed geometry, optional permanent multipoles, and induced-dipole
+// convergence as three separate layers. Its camera remains independent from Trajectory.
 function renderIpdFrame(frame, { resetCamera = false } = {}) {
-  // Before the models go, not after: removeAllModels does not touch shapes, so dropping the
-  // handles without removing them would leave the previous frame's arrows floating over the
-  // new geometry with nothing left able to clear them.
+  // removeAllModels does not touch shapes or labels, so clear both overlay families before the
+  // old geometry goes. Keeping separate handles prevents either family erasing the other.
   clearIpdDipoles();
+  clearIpdMultipoleOverlays();
   drawGeometry(ipdViewer, frame, { resetCamera });
+  renderIpdMultipoleOverlays(frame);
 }
 
 // --- IPD availability -------------------------------------------------------
@@ -820,18 +987,16 @@ function currentIpdHistory() {
   return selectedFrame()?.ipd?.history?.[currentIpdMode] ?? null;
 }
 
-// Manages availability text, the compute controls, the mode selector and panel visibility.
-// Synchronous by contract: showFrame calls it on every playback tick.
+// Manages availability text and display state synchronously. The damping selector remains
+// trajectory-wide and visible even when the selected separation has no result.
 function renderIpdSection(frame) {
   const message = el("ipd-message");
   const controls = el("ipd-controls");
   const display = el("ipd-display");
   const modes = ipdModes(frame);
 
-  if (!frame?.ipd || !frame.ipd.computable) {
-    // State A. Said rather than hidden: an empty panel does not explain itself.
-    message.textContent =
-      "IPD is unavailable for this frame because the required multipole inputs are missing.";
+  if (!frame?.ipd || modes.length === 0) {
+    message.textContent = "Select a system to inspect induced point dipoles.";
     message.hidden = false;
     controls.hidden = true;
     display.hidden = true;
@@ -844,14 +1009,23 @@ function renderIpdSection(frame) {
 
   const selected = ipdMode(frame, currentIpdMode);
   const stored = Boolean(selected?.stored);
+  const anyComputable = currentTrajectory?.frames.some((entry) => entry.ipd?.computable);
+  const compute = el("ipd-compute");
+  const computeAll = el("ipd-compute-all");
 
-  // Compute is offered per mode, not per frame: one mode can be stored while the other is not.
-  el("ipd-compute").disabled = stored;
-  el("ipd-compute").textContent = stored ? "Computed" : "Compute IPD";
+  compute.disabled = ipdComputeInFlight || stored || !frame.ipd.computable;
+  compute.textContent = stored ? "Computed" : "Compute IPD";
+  computeAll.disabled = ipdComputeInFlight || !anyComputable;
+
+  if (!frame.ipd.computable && !stored) {
+    message.textContent =
+      "IPD is unavailable for this frame because required MBIS/IPD inputs are missing or non-finite.";
+    message.hidden = false;
+    display.hidden = true;
+    return;
+  }
 
   if (selected?.problem) {
-    // The backend found a stored history that does not describe this geometry. Worth naming --
-    // it is data damage, not an absence.
     message.textContent = `Stored ${selected.label} result cannot be used: ${selected.problem}.`;
     message.hidden = false;
     display.hidden = true;
@@ -859,21 +1033,19 @@ function renderIpdSection(frame) {
   }
 
   if (!stored) {
-    // State B.
-    message.textContent = "No stored IPD calculation for this frame.";
+    message.textContent = "No stored IPD calculation for this frame and damping mode.";
     message.hidden = false;
     display.hidden = true;
     return;
   }
 
-  // State C.
   message.hidden = true;
   display.hidden = false;
-  el("ipd-play").disabled = (selected.iteration_count ?? 0) < 2;
-  // Only now does the viewer's container have a size. Opening the panel is not enough: in
-  // states A and B it sits inside a hidden div and measures 0x0, so this is the first moment
-  // 3Dmol can be given a canvas that will not be born collapsed.
-  initializeIpdViewer();
+  el("ipd-play").disabled = ipdComputeInFlight || (selected.iteration_count ?? 0) < 2;
+  // The display div and tab both have to be visible before 3Dmol is allowed to measure it.
+  if (isIpdTabActive()) {
+    initializeIpdViewer();
+  }
 }
 
 function fillIpdModeSelect(frame) {
@@ -881,13 +1053,12 @@ function fillIpdModeSelect(frame) {
   const modes = ipdModes(frame);
   select.replaceChildren();
   for (const mode of modes) {
-    // Every mode is listed whether or not it has a result, so the selector does not change
-    // shape as frames are walked and an uncomputed mode can still be chosen and computed.
+    // Every mode remains reachable; the suffix describes only the selected frame.
     const option = new Option(mode.stored ? mode.label : `${mode.label} — not computed`, mode.id);
     select.append(option);
   }
   select.value = currentIpdMode ?? "";
-  select.disabled = modes.length === 0;
+  select.disabled = ipdComputeInFlight || modes.length === 0;
 }
 
 // --- IPD history ------------------------------------------------------------
@@ -895,30 +1066,48 @@ function fillIpdModeSelect(frame) {
 // Cached on the frame object, which is ours: the whole trajectory already lives in the browser,
 // so a mode revisited on a frame already seen costs nothing. The cache is not persistence --
 // the server holds the computed result, this only avoids re-fetching it.
+function ipdHistoryKey(frame, mode) {
+  return `${frame.frame_index}:${mode}`;
+}
+
+function invalidateIpdHistory(frame, mode) {
+  const key = ipdHistoryKey(frame, mode);
+  ipdHistoryGenerations.set(key, (ipdHistoryGenerations.get(key) ?? 0) + 1);
+  if (frame.ipd?.history) {
+    delete frame.ipd.history[mode];
+  }
+}
+
 async function loadIpdHistory(frame, mode) {
   frame.ipd.history ??= {};
   if (frame.ipd.history[mode]) {
     return frame.ipd.history[mode];
   }
+  const key = ipdHistoryKey(frame, mode);
+  const generation = ipdHistoryGenerations.get(key) ?? 0;
   const uploadId = el("collection-select").value;
   const slug = el("system-select").value;
   const history = await callJson(
     `/api/uploads/${encodeURIComponent(uploadId)}/systems/${encodeURIComponent(slug)}` +
       `/frames/${frame.frame_index}/ipd?mode=${encodeURIComponent(mode)}`
   );
-  frame.ipd.history[mode] = history;
+  // A request that crossed a successful recomputation may return the old disk value. It can
+  // satisfy its stale caller, but it must not repopulate the invalidated cache.
+  if ((ipdHistoryGenerations.get(key) ?? 0) === generation) {
+    frame.ipd.history ??= {};
+    frame.ipd.history[mode] = history;
+  }
   return history;
 }
 
-// One scale for the whole history, so arrow length is comparable between iterations and the
-// convergence is visible as arrows settling rather than as a rescaling.
-function setIpdArrowScale(history) {
+// One selected-mode scale spans every SCF iteration at every separation. A frame-by-frame
+// auto-fit would make a smaller physical dipole look unchanged as the monomers separate.
+function setIpdArrowScale(trajectory, mode) {
   let largest = 0;
-  for (const iteration of history.mu_history) {
-    for (const vector of iteration) {
-      if (vector) {
-        largest = Math.max(largest, Math.hypot(...vector));
-      }
+  for (const frame of trajectory?.frames ?? []) {
+    const maximum = ipdMode(frame, mode)?.max_abs_mu;
+    if (typeof maximum === "number" && Number.isFinite(maximum)) {
+      largest = Math.max(largest, maximum);
     }
   }
   ipdBaseArrowScale = largest > 0 ? DEFAULT_ARROW_LEN / largest : 1.0;
@@ -935,27 +1124,54 @@ function updateIpdArrowScaleReadout() {
     `${multiplier.toFixed(1)}× (${currentIpdArrowScale().toFixed(1)} Å per a.u.)`;
 }
 
+function ipdIterationKey(frame, mode) {
+  return `${frame.frame_index}:${mode}`;
+}
+
 async function selectIpdMode(mode) {
   stopIpdPlayback();
   clearIpdDipoles();
   currentIpdMode = mode;
   currentIpdIteration = 0;
-
+  const requestToken = ++ipdHistoryRequestToken;
   const frame = selectedFrame();
+
+  setIpdArrowScale(currentTrajectory, mode);
+  renderIpdSeparationTimeline();
+  renderIpdSection(frame);
+
   if (!frame || !ipdMode(frame, mode)?.stored) {
-    // Nothing to show for this mode. The old mode's timeline would otherwise sit there in the
-    // hidden panel and reappear, belonging to a calculation no longer selected.
     el("ipd-timeline").replaceChildren();
     el("ipd-iteration-label").textContent = "";
-    renderIpdSection(frame);
     return;
   }
 
-  renderIpdSection(frame);
-  const history = await loadIpdHistory(frame, mode);
-  setIpdArrowScale(history);
+  let history;
+  try {
+    history = await loadIpdHistory(frame, mode);
+  } catch (error) {
+    if (requestToken !== ipdHistoryRequestToken) {
+      return;
+    }
+    throw error;
+  }
+
+  // A slower request for the previous separation or mode may complete after a later click.
+  if (
+    requestToken !== ipdHistoryRequestToken ||
+    frame !== selectedFrame() ||
+    mode !== currentIpdMode ||
+    !isIpdTabActive()
+  ) {
+    return;
+  }
+
   renderIpdTimeline(history.mu_history.length);
-  showIpdIteration(0);
+  const remembered = ipdIterationMemory.get(ipdIterationKey(frame, mode));
+  const initial = Number.isInteger(remembered)
+    ? Math.min(remembered, history.mu_history.length - 1)
+    : history.mu_history.length - 1;
+  showIpdIteration(initial);
 }
 
 // --- IPD iteration timeline -------------------------------------------------
@@ -987,7 +1203,7 @@ function renderIpdTimeline(iterationCount) {
     dot.className = "timeline-dot";
     dot.dataset.iteration = String(index);
     dot.title = ipdIterationTooltip(index, iterationCount);
-    dot.setAttribute("aria-label", `Select IPD iteration ${index}`);
+    dot.setAttribute("aria-label", `Select ${ipdIterationTooltip(index, iterationCount)}`);
     dot.addEventListener("click", () => selectIpdIteration(index));
     timeline.append(dot);
   }
@@ -1055,6 +1271,7 @@ function showIpdIteration(index) {
   }
 
   currentIpdIteration = index;
+  ipdIterationMemory.set(ipdIterationKey(frame, currentIpdMode), index);
   renderIpdDipoles(frame, history.mu_history[index]);
   renderIpdTimelineSelection();
   el("ipd-iteration-label").textContent = ipdIterationLabel(index, history);
@@ -1093,7 +1310,10 @@ function renderIpdDipoles(frame, vectors) {
 function setIpdPlayButton(playing) {
   const button = el("ipd-play");
   button.textContent = playing ? "❚❚" : "▶";
-  button.setAttribute("aria-label", playing ? "Pause IPD" : "Play IPD");
+  button.setAttribute(
+    "aria-label",
+    playing ? "Pause SCF convergence" : "Play SCF convergence"
+  );
 }
 
 function stopIpdPlayback() {
@@ -1135,69 +1355,152 @@ function ipdUrl(suffix) {
   );
 }
 
-// A computed result replaces the frame's whole availability block, so the cached histories
-// hanging off it have to be carried across by hand -- they are still valid, the geometry did
-// not change.
-function applyIpdMetadata(frame, ipd) {
+// A refreshed availability block replaces the old one. Cached histories for unaffected modes
+// survive, but a successfully recomputed mode must be deleted or the viewer would replay the
+// pre-recompute result.
+function applyIpdMetadata(frame, ipd, { invalidateMode = null } = {}) {
   const history = frame.ipd?.history;
+  if (invalidateMode) {
+    invalidateIpdHistory(frame, invalidateMode);
+  }
   frame.ipd = ipd;
-  if (history) {
+  if (history && Object.keys(history).length) {
     frame.ipd.history = history;
   }
 }
 
-async function computeIpd() {
-  const frame = selectedFrame();
-  const mode = el("ipd-mode").value;
-  if (!frame || !mode) {
-    return;
+function setIpdComputeState(inFlight, { allFrames = false } = {}) {
+  ipdComputeInFlight = inFlight;
+  if (inFlight) {
+    stopIpdPlayback();
+    ipdHistoryRequestToken += 1;
   }
-  setStatus(`Computing ${mode} for frame ${frame.frame_index + 1}…`);
-  const result = await callJson(ipdUrl(`/frames/${frame.frame_index}/ipd`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode }),
-  });
-
-  applyIpdMetadata(frame, result.ipd);
-  // The response already carries the history, so seeding the cache here is what makes the
-  // transition from "Compute IPD" to arrows happen without a second request.
-  frame.ipd.history ??= {};
-  frame.ipd.history[mode] = result.history;
-
-  renderIpdSection(frame);
-  await selectIpdMode(mode);
-  setStatus(`${mode}: ${result.history.iteration_count} iterations`);
+  renderIpdSection(selectedFrame());
+  if (inFlight) {
+    el("ipd-compute").textContent = "Computing…";
+    if (allFrames) {
+      el("ipd-compute-all").textContent = "Computing all frames…";
+    }
+  } else {
+    el("ipd-compute-all").textContent = "Compute all frames";
+  }
 }
 
-// The button that actually gets used: nothing is ever pre-computed, so a 14-frame scan would
-// otherwise be 14 presses and 14 collection rewrites.
-async function computeIpdForTrajectory() {
+function refreshTrajectoryConsumers(mode) {
+  setIpdArrowScale(currentTrajectory, mode);
+  renderIpdSeparationTimeline();
+  plots.setTrajectory(currentTrajectory);
+}
+
+async function computeIpd() {
+  const trajectory = currentTrajectory;
+  const frame = selectedFrame();
   const mode = el("ipd-mode").value;
-  if (!currentTrajectory || !mode) {
+  if (!frame || !mode || ipdComputeInFlight) {
     return;
   }
-  setStatus(`Computing ${mode} for all ${currentTrajectory.frames.length} frames…`);
-  const result = await callJson(ipdUrl("/ipd"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode }),
-  });
 
-  for (const entry of result.frames) {
-    const frame = currentTrajectory.frames[entry.frame_index];
-    if (frame) {
-      applyIpdMetadata(frame, entry.ipd);
-    }
+  setIpdComputeState(true);
+  setStatus(`Computing ${mode} for frame ${frame.frame_index + 1}…`);
+  let result;
+  try {
+    result = await callJson(ipdUrl(`/frames/${frame.frame_index}/ipd`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+  } finally {
+    setIpdComputeState(false);
   }
 
+  // A collection/system change while the request was running makes the response obsolete.
+  if (trajectory !== currentTrajectory || !result) {
+    return;
+  }
+
+  applyIpdMetadata(frame, result.ipd, { invalidateMode: mode });
+  frame.energies = result.energies;
+  // The response already carries this new history, so seed the cache after invalidating it.
+  frame.ipd.history ??= {};
+  frame.ipd.history[mode] = result.history;
+  failedIpdFrames(mode).delete(Number(frame.frame_index));
+
+  refreshTrajectoryConsumers(mode);
+  renderIpdSection(frame);
+  if (isIpdTabActive()) {
+    await selectIpdMode(mode);
+  }
+  setStatus(`${result.history.label}: ${result.history.iteration_count} history entries`);
+}
+
+// This is deliberately reprocessing, not fill-missing: every computable frame is attempted for
+// the selected mode, while each failed replacement leaves its previous stored value untouched.
+async function computeIpdForTrajectory() {
+  const trajectory = currentTrajectory;
+  const mode = el("ipd-mode").value;
+  if (!trajectory || !mode || ipdComputeInFlight) {
+    return;
+  }
+
+  const storedCount = trajectory.frames.filter((frame) => ipdMode(frame, mode)?.stored).length;
+  if (
+    storedCount > 0 &&
+    !window.confirm(
+      `Compute all frames will replace ${storedCount} stored ${ipdMode(trajectory.frames[0], mode)?.label ?? mode} result(s). Continue?`
+    )
+  ) {
+    return;
+  }
+
+  setIpdComputeState(true, { allFrames: true });
+  setStatus(`Computing ${mode} for all ${trajectory.frames.length} frames…`);
+  let result;
+  try {
+    result = await callJson(ipdUrl("/ipd"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+  } finally {
+    setIpdComputeState(false);
+  }
+
+  if (trajectory !== currentTrajectory || !result) {
+    return;
+  }
+
+  const recomputed = new Set(result.computed.map(Number));
+  ipdFailedFrames.set(
+    mode,
+    new Set(result.failed.map((failure) => Number(failure.frame_index)))
+  );
+
+  for (const entry of result.frames) {
+    const frame = trajectory.frames.find(
+      (candidate) => Number(candidate.frame_index) === Number(entry.frame_index)
+    );
+    if (!frame) {
+      continue;
+    }
+    applyIpdMetadata(frame, entry.ipd, {
+      invalidateMode: recomputed.has(Number(entry.frame_index)) ? mode : null,
+    });
+    frame.energies = entry.energies;
+  }
+
+  refreshTrajectoryConsumers(mode);
   renderIpdSection(selectedFrame());
-  await selectIpdMode(mode);
+  if (isIpdTabActive()) {
+    await selectIpdMode(mode);
+  }
 
   const parts = [`${result.computed.length} computed`];
-  if (result.skipped.length) parts.push(`${result.skipped.length} already stored`);
   if (result.failed.length) parts.push(`${result.failed.length} failed`);
-  setStatus(`${result.label}: ${parts.join(", ")}`);
+  const firstFailure = result.failed[0]?.error;
+  setStatus(
+    `${result.label}: ${parts.join(", ")}${firstFailure ? `. ${firstFailure}` : ""}`,
+    result.failed.length > 0
+  );
 }
 
 // --- loading ----------------------------------------------------------------
@@ -1279,26 +1582,60 @@ async function uploadFile(file) {
 
 // --- tabs -------------------------------------------------------------------
 
-// aria-selected is the state; the panel's `hidden` and the CSS both follow it, so there is no
-// second copy of "which tab is active" to keep in step.
+async function activateIpdTab() {
+  // If Trajectory was playing when the user changed tabs, do not turn it into an implicit IPD
+  // separation animation. Separation changes in this tab are manual.
+  pausePlayback();
+  const frame = selectedFrame();
+  renderIpdSection(frame);
+  initializeIpdViewer();
+  if (ipdViewer && frame) {
+    renderIpdFrame(frame);
+  }
+  if (frame && ipdMode(frame, currentIpdMode)?.stored) {
+    await selectIpdMode(currentIpdMode);
+  }
+}
+
+function deactivateIpdTab() {
+  stopIpdPlayback();
+  ipdHistoryRequestToken += 1;
+}
+
+// aria-selected is the state; the panel's `hidden` and the CSS both follow it, matching the
+// existing Plots-tab lifecycle rather than inventing a second navigation mechanism.
 const TABS = [
   { tab: "tab-trajectory", panel: "panel-trajectory" },
+  {
+    tab: "tab-ipd",
+    panel: "panel-ipd",
+    onShow: activateIpdTab,
+    onHide: deactivateIpdTab,
+  },
   { tab: "tab-plots", panel: "panel-plots", onShow: () => plots.activate() },
 ];
 
 function selectTab(id) {
+  let activated = null;
   for (const entry of TABS) {
     const active = entry.tab === id;
     const tab = el(entry.tab);
+    const wasActive = tab.getAttribute("aria-selected") === "true";
     tab.setAttribute("aria-selected", String(active));
     // Roving tabindex: the tab bar is one stop in the page's tab order, and the arrow keys
     // move within it.
     tab.tabIndex = active ? 0 : -1;
     el(entry.panel).hidden = !active;
-    if (active) {
-      entry.onShow?.();
+    if (!active && wasActive) {
+      entry.onHide?.();
+    }
+    if (active && !wasActive) {
+      activated = entry;
     }
   }
+  // Measure a tab only after every sibling has received its final hidden state. This is the
+  // same activation boundary used by Plotly and the lazy IPD 3Dmol canvas.
+  Promise.resolve(activated?.onShow?.()).catch((error) => setStatus(error.message, true));
 }
 
 function initTabs() {
@@ -1343,8 +1680,7 @@ function init() {
   el("collection-select").addEventListener("change", guard(loadSystems));
   el("system-select").addEventListener("change", guard(loadTrajectory));
   el("play-button").addEventListener("click", togglePlayback);
-  // Trajectory dots wire themselves up in renderTrajectoryTimeline -- each one is bound to the
-  // frame it stands for, and every one calls selectFrame.
+  // Both physical-frame timelines wire their own buttons to the shared selectFrame path.
 
   el("multipole-views").addEventListener("click", (event) => {
     const { view } = event.target.dataset;
@@ -1378,21 +1714,26 @@ function init() {
     renderMultipoleOverlays(selectedFrame());
   });
 
-  // The IPD viewer cannot be created until the panel is open and has a size.
-  el("ipd-section").addEventListener(
-    "toggle",
-    guard(async () => {
-      if (!isIpdSectionOpen()) {
-        stopIpdPlayback();
-        return;
-      }
-      initializeIpdViewer();
-      const frame = selectedFrame();
-      if (frame && ipdMode(frame, currentIpdMode)?.stored) {
-        await selectIpdMode(currentIpdMode);
-      }
-    })
-  );
+  el("ipd-show-monomer-dipoles").addEventListener("change", (event) => {
+    setIpdMonomerDipolesVisible(event.target.checked);
+  });
+  el("ipd-show-dimer-dipoles").addEventListener("change", (event) => {
+    setIpdDimerDipolesVisible(event.target.checked);
+  });
+  el("ipd-show-delta-dipoles").addEventListener("change", (event) => {
+    setIpdDeltaDipolesVisible(event.target.checked);
+  });
+  el("ipd-charge-label-mode").addEventListener("change", (event) => {
+    setIpdChargeLabelMode(event.target.value);
+  });
+  // Permanent overlays only: induced arrows and the SCF iteration remain untouched.
+  el("ipd-multipole-arrow-scale").addEventListener("input", () => {
+    updatePermanentArrowScaleReadout(
+      "ipd-multipole-arrow-scale",
+      "ipd-multipole-arrow-scale-readout"
+    );
+    renderIpdMultipoleOverlays(selectedFrame());
+  });
 
   el("ipd-mode").addEventListener(
     "change",

@@ -160,6 +160,17 @@
           Trajectory
         </button>
         <button
+          id="tab-ipd"
+          class="tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-ipd"
+          tabindex="-1"
+        >
+          IPD
+        </button>
+        <button
           id="tab-plots"
           class="tab"
           type="button"
@@ -197,8 +208,8 @@
         <!-- These change what is drawn in 3D, so they live with the viewer rather than in the
              multipole table below it. Beside it rather than beneath: the controls are short and
              the canvas is wide, so stacking them wasted the room to the right and pushed the
-             panels below further down. `overlays-side` is what makes it a column -- the IPD
-             panel keeps the plain stacked `.overlays`. -->
+             panels below further down. `overlays-side` is what makes it a column; the IPD
+             viewer reuses the same layout for its independent permanent multipoles. -->
         <div class="overlays overlays-side">
           <span class="overlays-title">Viewer overlays</span>
 
@@ -220,7 +231,7 @@
 
           <fieldset class="overlay-group">
             <legend>Charge labels</legend>
-            <select id="charge-label-mode">
+            <select id="charge-label-mode" aria-label="Trajectory viewer charge labels">
               <option value="none">None</option>
               <option value="monomer">Monomer</option>
               <option value="dimer">Dimer</option>
@@ -230,7 +241,15 @@
 
           <fieldset class="overlay-group scale-control">
             <legend>Arrow scale</legend>
-            <input id="arrow-scale" type="range" min="0.1" max="5" step="0.1" value="1" />
+            <input
+              id="arrow-scale"
+              type="range"
+              min="0.1"
+              max="5"
+              step="0.1"
+              value="1"
+              aria-label="Trajectory viewer permanent dipole scale"
+            />
             <span id="arrow-scale-readout" class="scale-readout">1.0&times;</span>
           </fieldset>
         </div>
@@ -265,44 +284,134 @@
         </div>
       </details>
 
-      <!-- IPD is a secondary analysis of the selected frame, with its own viewer: the main one
-           already carries monomer, dimer and Δ MBIS dipoles plus charge labels, and induced
-           dipoles on top of that would be unreadable. -->
-      <details id="ipd-section" class="ipd">
-        <summary>IPD</summary>
+      </section>
 
-        <p id="ipd-message" class="ipd-message" hidden></p>
+      <!-- IPD has its own top-level panel, parallel to the Plots panel. The physical frame is
+           shared with Trajectory; only the induced-dipole SCF history is local to this tab. -->
+      <section
+        id="panel-ipd"
+        class="panel-stack"
+        role="tabpanel"
+        aria-labelledby="tab-ipd"
+        hidden
+      >
+        <section class="ipd" aria-labelledby="ipd-heading">
+          <h2 id="ipd-heading" class="panel-title">Induced point dipoles</h2>
 
-        <div id="ipd-controls" class="ipd-controls" hidden>
-          <label class="ipd-field">
-            <span>Damping mode</span>
-            <select id="ipd-mode"></select>
-          </label>
-          <button id="ipd-compute" type="button">Compute IPD</button>
-          <button id="ipd-compute-all" type="button">Compute for all frames</button>
-        </div>
-
-        <div id="ipd-display" hidden>
-          <!-- One dot per SCF step, or a range input past MAX_DOTS. Both call
-               selectIpdIteration; geometry never changes here. -->
-          <div id="ipd-timeline" class="timeline" role="group" aria-label="IPD iteration"></div>
-
-          <div id="ipd-viewer" class="viewer"></div>
-
-          <div class="playback">
-            <button id="ipd-play" type="button" aria-label="Play IPD">▶</button>
-            <span id="ipd-iteration-label" class="frame-label"></span>
+          <div id="ipd-controls" class="ipd-controls" hidden>
+            <label class="ipd-field">
+              <span>Damping mode</span>
+              <select id="ipd-mode"></select>
+            </label>
+            <button id="ipd-compute" type="button">Compute IPD</button>
+            <button id="ipd-compute-all" type="button">Compute all frames</button>
           </div>
 
-          <div class="overlays">
-            <fieldset class="overlay-group scale-control">
-              <legend>IPD arrow scale</legend>
-              <input id="ipd-arrow-scale" type="range" min="0.1" max="5" step="0.1" value="1" />
-              <span id="ipd-arrow-scale-readout" class="scale-readout">1.0&times;</span>
-            </fieldset>
+          <section class="ipd-axis" aria-labelledby="ipd-separation-heading">
+            <h3 id="ipd-separation-heading">Separation</h3>
+            <div
+              id="ipd-separation-timeline"
+              class="timeline timeline-separation"
+              role="group"
+              aria-label="Intermonomer separation"
+            ></div>
+            <p id="ipd-frame-label" class="frame-label"></p>
+            <div class="timeline-legend" role="group" aria-label="Separation marker status">
+              <span data-state="converged">Computed</span>
+              <span data-state="not-converged">Not converged</span>
+              <span data-state="missing">Not computed</span>
+              <span data-state="unavailable">Unavailable</span>
+              <span data-state="error">Problem</span>
+            </div>
+          </section>
+
+          <p id="ipd-message" class="ipd-message" hidden></p>
+
+          <div id="ipd-display" hidden>
+            <section class="viewer-panel ipd-viewer-panel">
+              <div class="viewer-main">
+                <div id="ipd-viewer" class="viewer"></div>
+              </div>
+
+              <div class="overlays overlays-side">
+                <span class="overlays-title">Permanent multipole overlays</span>
+
+                <fieldset class="overlay-group">
+                  <legend>Dipoles</legend>
+                  <label class="swatch-label">
+                    <input id="ipd-show-monomer-dipoles" type="checkbox" />
+                    <span class="swatch swatch-monomer"></span>Monomer
+                  </label>
+                  <label class="swatch-label">
+                    <input id="ipd-show-dimer-dipoles" type="checkbox" />
+                    <span class="swatch swatch-dimer"></span>Dimer
+                  </label>
+                  <label class="swatch-label">
+                    <input id="ipd-show-delta-dipoles" type="checkbox" />
+                    <span class="swatch swatch-delta"></span>Δ Dimer − Monomer
+                  </label>
+                </fieldset>
+
+                <fieldset class="overlay-group">
+                  <legend>Charge labels</legend>
+                  <select id="ipd-charge-label-mode" aria-label="IPD viewer charge labels">
+                    <option value="none">None</option>
+                    <option value="monomer">Monomer</option>
+                    <option value="dimer">Dimer</option>
+                    <option value="delta">Difference</option>
+                  </select>
+                </fieldset>
+
+                <fieldset class="overlay-group scale-control">
+                  <legend>Permanent dipole scale</legend>
+                  <input
+                    id="ipd-multipole-arrow-scale"
+                    type="range"
+                    min="0.1"
+                    max="5"
+                    step="0.1"
+                    value="1"
+                    aria-label="IPD viewer permanent dipole scale"
+                  />
+                  <span id="ipd-multipole-arrow-scale-readout" class="scale-readout">
+                    1.0&times;
+                  </span>
+                </fieldset>
+              </div>
+            </section>
+
+            <section class="ipd-axis" aria-labelledby="ipd-scf-heading">
+              <h3 id="ipd-scf-heading">SCF convergence</h3>
+              <!-- One dot per SCF step, or a range input past MAX_DOTS. Geometry stays fixed. -->
+              <div
+                id="ipd-timeline"
+                class="timeline"
+                role="group"
+                aria-label="SCF convergence iteration"
+              ></div>
+              <div class="playback">
+                <button id="ipd-play" type="button" aria-label="Play SCF convergence">▶</button>
+                <span id="ipd-iteration-label" class="frame-label"></span>
+              </div>
+            </section>
+
+            <div class="overlays">
+              <fieldset class="overlay-group scale-control">
+                <legend>Induced dipole scale</legend>
+                <input
+                  id="ipd-arrow-scale"
+                  type="range"
+                  min="0.1"
+                  max="5"
+                  step="0.1"
+                  value="1"
+                  aria-label="Induced IPD arrow scale"
+                />
+                <span id="ipd-arrow-scale-readout" class="scale-readout">1.0&times;</span>
+              </fieldset>
+            </div>
           </div>
-        </div>
-      </details>
+        </section>
       </section>
 
       <section
@@ -313,10 +422,8 @@
         hidden
       >
         <section class="plot-panel">
-          <!-- The tab is "Plots" because more categories are coming; this heading names the
-               one category it draws today. -->
           <h2>Induction</h2>
-          <div id="plot-chart"></div>
+          <div id="plot-chart" class="plot-chart"></div>
         </section>
 
         <section class="plot-controls">
@@ -326,6 +433,18 @@
             <legend>Curves</legend>
           </fieldset>
           <p id="plot-status" class="status"></p>
+        </section>
+
+        <section class="plot-panel">
+          <h2>SAPT Components</h2>
+          <div id="sapt-components-chart" class="plot-chart"></div>
+        </section>
+
+        <section class="plot-controls">
+          <fieldset id="sapt-components-curves" class="plot-curve-list">
+            <legend>Curves</legend>
+          </fieldset>
+          <p id="sapt-components-status" class="status"></p>
         </section>
       </section>
     </main>

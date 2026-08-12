@@ -5,6 +5,8 @@
   --text: #1c2530;
   --muted: #5c6773;
   --error: #b3261e;
+  --success: #2e7d32;
+  --warning: #9a5b00;
 
   /* Curve colours for the Plots tab, on two independent channels.
 
@@ -13,8 +15,9 @@
      Dash   = total vs breakdown: a total is solid, its components are dashed or dotted. Set
               in plots.js, since Plotly owns line style.
 
-     Only induction is drawn today; the other three are here so an electrostatics category
-     needs no new colours. Red stays reserved for electrostatics. */
+     The SAPT Components chart uses the conventional decomposition palette. Red stays
+     reserved for electrostatics. */
+  --sapt-total: #111111; /* total          -- black  */
   --sapt-elst: #c0392b; /* electrostatics -- red    */
   --sapt-exch: #2e7d32; /* exchange       -- green  */
   --sapt-ind: #1f5fa8;  /* induction      -- blue   */
@@ -27,6 +30,10 @@
   --ipd-2: #6b2f96;
   --ipd-3: #9a55c4;
   --ipd-4: #bf00bf;
+
+  /* AMOEBA+ parameterizations share an orange family but use distinct shades. */
+  --amoeba-1: #a64b00;
+  --amoeba-2: #d17a00;
 
   /* Any other model family, so one that this CSS has never heard of still draws. */
   --model-other: #4a6b70;
@@ -250,17 +257,16 @@ main {
   outline-offset: -2px;
 }
 
-/* The trajectory panel replaced three direct children of `main`, so it has to reproduce the
-   grid they were spaced by. */
+/* Stacked tab panels use the same spacing; the IPD panel follows the Trajectory panel rather
+   than introducing a tab-specific shell. */
 .panel-stack {
   display: grid;
   gap: 1rem;
 }
 
 /* Load-bearing. `hidden` hides an element through the UA rule `[hidden] { display: none }`,
-   which *any* author `display` beats -- and both panels set one. Without this the inactive
-   panel stays on screen under the active one, and plots.js's hidden-panel guard, which asks
-   whether the chart is inside `[hidden]` and has a size, answers yes either way. */
+   which *any* author `display` beats. Without this an inactive panel can remain laid out, and
+   both Plotly and 3Dmol would measure a supposedly hidden container. */
 .panel-stack[hidden],
 .plot-shell[hidden] {
   display: none;
@@ -364,8 +370,8 @@ select:disabled {
 
 /* --- timelines ------------------------------------------------------------ */
 
-/* Shared by the trajectory (physical geometry) and the IPD panel (SCF iteration). The two
-   mean different things -- see the IPD section -- but a dot is a dot. */
+/* Shared by both physical-frame controls and the IPD SCF iteration control. The nearby axis
+   heading names which dimension a dot changes. */
 .timeline {
   display: flex;
   align-items: center;
@@ -387,6 +393,7 @@ select:disabled {
 
 .timeline-dot {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   padding: 0.3rem 0;
   margin: 0;
@@ -427,8 +434,47 @@ select:disabled {
   outline-offset: 2px;
 }
 
-/* Fallback past MAX_DOTS: an SCF that ran to the 200-iteration cap is 201 dots, which is not
-   a timeline any more. */
+/* Separation markers carry mode-specific status, so preserve every one in a single scrollable
+   row rather than wrapping or degrading them to an unlabeled range input. */
+.timeline-separation {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 0.15rem 0.2rem 0.45rem;
+}
+
+.timeline-separation .timeline-dot[data-state="converged"]::after {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.timeline-separation .timeline-dot[data-state="not-converged"]::after {
+  border-color: var(--warning);
+  background: var(--warning);
+}
+
+.timeline-separation .timeline-dot[data-state="missing"]::after {
+  border-color: var(--muted);
+  background: var(--panel);
+}
+
+.timeline-separation .timeline-dot[data-state="unavailable"]::after {
+  border-style: dashed;
+  border-color: var(--muted);
+  background: var(--bg);
+  opacity: 0.55;
+}
+
+.timeline-separation .timeline-dot[data-state="error"]::after {
+  border-color: var(--error);
+  background: var(--error);
+}
+
+/* Keep status colour while making the shared current frame unmistakable. */
+.timeline-separation .timeline-dot[aria-current="true"]::after {
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text);
+}
+
+/* Fallback past MAX_DOTS applies only to an SCF that ran to the iteration cap. */
 .timeline-range {
   width: 100%;
 }
@@ -445,12 +491,9 @@ select:disabled {
   border-top: 1px solid var(--border);
 }
 
-/* The sidebar variant, used by the main viewer only. A fixed column rather than a flexible
-   one: these controls have a natural width, and letting them stretch would only take room
-   from the canvas, which is the thing that benefits from it.
-
-   The IPD panel keeps the plain .overlays above -- it holds a single slider, so a column
-   there would be mostly empty. */
+/* The sidebar variant used by both 3D viewers. A fixed column rather than a flexible one:
+   these controls have a natural width, and letting them stretch would only take room from the
+   canvas. The IPD induced-arrow scale remains a plain `.overlays` row below its SCF controls. */
 .overlays-side {
   flex: 0 0 16rem;
   flex-direction: column;
@@ -554,9 +597,72 @@ select:disabled {
   border-radius: 6px;
 }
 
-.ipd > summary {
-  font-weight: 600;
-  cursor: pointer;
+.panel-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.ipd-axis {
+  margin-top: 1rem;
+}
+
+.ipd-axis h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ipd-axis > .frame-label {
+  display: block;
+  min-width: 0;
+  margin: 0.2rem 0 0;
+}
+
+.timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1rem;
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.timeline-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.timeline-legend span::before {
+  content: "";
+  width: 0.65rem;
+  height: 0.65rem;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+  background: var(--panel);
+}
+
+.timeline-legend span[data-state="converged"]::before {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.timeline-legend span[data-state="not-converged"]::before {
+  border-color: var(--warning);
+  background: var(--warning);
+}
+
+.timeline-legend span[data-state="unavailable"]::before {
+  border-style: dashed;
+  background: var(--bg);
+  opacity: 0.55;
+}
+
+.timeline-legend span[data-state="error"]::before {
+  border-color: var(--error);
+  background: var(--error);
 }
 
 .ipd-message {
@@ -571,6 +677,10 @@ select:disabled {
   align-items: flex-end;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+
+.ipd-controls[hidden] {
+  display: none;
 }
 
 .ipd-field {
@@ -602,11 +712,15 @@ select:disabled {
   cursor: default;
 }
 
-/* The IPD viewer is shorter than the main one: it shows the same geometry at a fixed camera,
-   and the panel already carries a timeline above it and playback below. */
+/* The IPD viewer is shorter than the main one: the tab also carries both named axes and its
+   computation controls. Its panel reuses the Trajectory viewer/sidebar layout. */
+.ipd-viewer-panel {
+  margin-top: 1rem;
+}
+
 #ipd-viewer {
   height: 20rem;
-  margin-top: 0.75rem;
+  margin-top: 0;
 }
 
 #ipd-play {
@@ -625,6 +739,15 @@ select:disabled {
   color: var(--muted);
   background: var(--bg);
   cursor: default;
+}
+
+#panel-ipd .playback {
+  flex-wrap: wrap;
+}
+
+#panel-ipd .playback .frame-label {
+  flex: 1 1 20rem;
+  min-width: 0;
 }
 
 /* --- multipoles ---------------------------------------------------------- */
@@ -759,7 +882,7 @@ select:disabled {
 
 /* An empty div is zero pixels tall and Plotly sizes itself to its container, so without an
    explicit height the chart renders invisibly. */
-#plot-chart {
+.plot-chart {
   width: 100%;
   min-height: 26rem;
   height: 50vh;
