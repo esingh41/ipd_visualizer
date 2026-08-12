@@ -15,7 +15,7 @@ frames x modes x iterations x atoms x 3:
 
 :func:`frame_ipd_metadata`
     Per frame, small enough to ride along in every trajectory payload: what exists, what could
-    be computed, and how many iterations each stored history has.
+    be computed, iteration counts, and the maximum magnitude needed for common arrow scaling.
 
 :func:`frame_ipd_history`
     One frame, one mode, the whole SCF trajectory. Lazy-loaded, and for a run that hit the
@@ -151,6 +151,7 @@ def _mode_entry(df, row_index, mode_id, n_atoms, n_atoms_A):
         "iteration_count": None,
         "energy": None,
         "converged": None,
+        "max_abs_mu": None,
         "problem": None,
     }
 
@@ -167,6 +168,13 @@ def _mode_entry(df, row_index, mode_id, n_atoms, n_atoms_A):
         entry["problem"] = problem
         return entry
 
+    # One frame summary lets the browser choose a single selected-mode scale over the whole
+    # trajectory without eager-loading every full SCF history. Ignore non-finite magnitudes;
+    # JSON serialization rejects NaN and an invalid vector should not poison every frame's fit.
+    magnitudes = np.linalg.norm(np.concatenate([hist_A, hist_B], axis=1), axis=-1)
+    finite_magnitudes = magnitudes[np.isfinite(magnitudes)]
+    max_abs_mu = float(finite_magnitudes.max()) if finite_magnitudes.size else 0.0
+
     entry.update(
         {
             "stored": True,
@@ -176,6 +184,7 @@ def _mode_entry(df, row_index, mode_id, n_atoms, n_atoms_A):
             "iteration_count": int(hist_A.shape[0]),
             "energy": _finite(result["energy"]),
             "converged": bool(result["converged"]),
+            "max_abs_mu": max_abs_mu,
         }
     )
     return entry

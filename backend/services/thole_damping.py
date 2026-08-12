@@ -439,6 +439,27 @@ def compute_ipd_row(
     quadA, quadB = t("theta hf/adz A"), t("theta hf/adz B")
     hfvr_A, hfvr_B = t("volume ratios A"), t("volume ratios B")
 
+    # Column presence alone does not make a row computable. In particular, some NENCI bare-ion
+    # fragments carry ``[NaN]`` as their isolated-monomer volume ratio. Letting that reach the
+    # SCF fills an otherwise correctly-shaped 201-step history with NaNs; without this boundary
+    # check the service would report the kernel call as "computed" and then decline to expose
+    # the unusable result. Name the actual input instead, before doing any expensive work.
+    inputs = {
+        "q hf/adz A": qA,
+        "q hf/adz B": qB,
+        "mu hf/adz A": muA,
+        "mu hf/adz B": muB,
+        "theta hf/adz A": quadA,
+        "theta hf/adz B": quadB,
+        "volume ratios A": hfvr_A,
+        "volume ratios B": hfvr_B,
+    }
+    nonfinite_inputs = [name for name, value in inputs.items() if not torch.isfinite(value).all()]
+    if nonfinite_inputs:
+        raise ValueError(
+            "non-finite values in required IPD input(s): " + ", ".join(nonfinite_inputs)
+        )
+
     # Zeroing the H polarizability is NOT done here: hfvr feeds both the radii below and the
     # damping length, which divides by alpha (-> NaN). It happens inside the SCF instead, via
     # include_H, after the tensors are built.
@@ -555,7 +576,7 @@ def compute_ipd_row(
     # way to the cap" exactly the non-converged case.
     iterations = int(np.asarray(muiA_hist).shape[0]) - 1
 
-    return {
+    result = {
         "energy": ind.sum().item(),
         "energy_qu": ind_qu.sum().item(),
         "energy_uu": ind_uu.sum().item(),
@@ -577,6 +598,23 @@ def compute_ipd_row(
         "iterations": iterations,
         "converged": iterations < MAX_SCF_ITERATIONS,
     }
+
+    # A run that reaches the iteration cap can still be a useful finite history and is returned
+    # with ``converged=False``. NaN/Inf is different: it cannot be plotted, persisted as strict
+    # JSON, or honestly counted as computed. Keep this check in the scientific entry point so
+    # offline callers cannot accidentally store the same poisoned result either.
+    essential_outputs = ("energy", "mu_ind_A", "mu_ind_B", "mu_hist_A", "mu_hist_B")
+    nonfinite_outputs = [
+        role
+        for role in essential_outputs
+        if not np.isfinite(np.asarray(result[role], dtype=float)).all()
+    ]
+    if nonfinite_outputs:
+        raise ValueError(
+            "IPD calculation produced non-finite result(s): " + ", ".join(nonfinite_outputs)
+        )
+
+    return result
 
 
 # --- whole-dataframe entry point --------------------------------------------

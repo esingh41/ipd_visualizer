@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import threading
 
+import numpy as np
+
 from backend.services import (
     capability,
     dataframe_schema,
@@ -99,11 +101,12 @@ def get_history(upload_id, slug, frame_index, mode_id):
 # --- computing --------------------------------------------------------------
 
 
-def _require_inputs(df, mode_id):
-    """Raise unless this row carries the MBIS columns an IPD run reads.
+def _require_inputs(df, label, mode_id):
+    """Raise unless this row carries finite values in every MBIS input the kernel reads.
 
-    Checked here rather than left to the kernel so a missing column is a 400 naming the
-    column, not a KeyError surfacing as a 500.
+    Checked here rather than left to the kernel so a missing column or a bare-ion ``[NaN]``
+    volume ratio is a user-fixable input error naming the field, not an opaque 500 after a
+    200-step all-NaN SCF run.
     """
     required = dataframe_schema.FEATURE_REQUIREMENTS["ipd_computable"]
     missing = sorted(column for column in required if column not in df.columns)
@@ -115,11 +118,30 @@ def _require_inputs(df, mode_id):
             details={"missing_columns": missing, "mode": mode_id},
         )
 
+    invalid = []
+    for column in sorted(required):
+        try:
+            value = np.asarray(df.at[label, column], dtype=float)
+        except (TypeError, ValueError):
+            invalid.append(column)
+            continue
+        if value.size == 0 or not np.isfinite(value).all():
+            invalid.append(column)
+    if invalid:
+        raise IpdError(
+            "ipd_inputs_invalid",
+            f"Row {label} cannot be used for an IPD calculation: required input(s) "
+            f"{', '.join(repr(column) for column in invalid)} contain missing or "
+            "non-finite values.",
+            status=422,
+            details={"invalid_columns": invalid, "mode": mode_id, "row_index": int(label)},
+        )
+
 
 def _compute_into(df, label, mode_id):
     """Run one row and one mode, writing the result into ``df`` in place."""
     parameterization = ipd_results.mode_parameterization(mode_id)
-    _require_inputs(df, mode_id)
+    _require_inputs(df, label, mode_id)
     try:
         result = thole_damping.compute_ipd_row(df.loc[label], **parameterization)
     except IpdError:
@@ -181,6 +203,7 @@ def compute(upload_id, slug, frame_index, mode_id):
         return {
             "frame_index": int(frame_index),
             "ipd": refreshed["ipd"],
+            "energies": refreshed.get("energies", {}),
             "history": ipd_results.frame_ipd_history(df, label, mode_id),
         }
 
@@ -191,9 +214,10 @@ def compute_system(upload_id, slug, mode_id):
     The unit that matches how these are actually looked at: a scan is walked frame by frame,
     and computing them one request at a time would pay the collection rewrite once per frame.
 
-    Frames that already carry a result for this mode are skipped, so re-running is cheap and
-    repeat presses are harmless. A frame that fails is recorded and the rest still run --
-    losing thirteen good frames to one bad one would be the worse trade.
+    Every frame is rerun, including one that already carries this mode: this action is the
+    explicit reprocessing path. A frame that fails is recorded and the rest still run. Because
+    `_compute_into` writes only after a successful kernel call, a failed rerun leaves that
+    frame's previous stored result intact.
     """
     capability.require_capability()
     ipd_results.mode_parameterization(mode_id)
@@ -202,15 +226,10 @@ def compute_system(upload_id, slug, mode_id):
     with _lock_for(upload_id):
         df = system_serialization.load_processed(upload_id)
 
-        computed, skipped, failed = [], [], []
+        computed, failed = [], []
         for frame in system["frames"]:
             index = int(frame["frame_index"])
             label = _row_label(df, frame)
-            if thole_damping.has_ipd_result(
-                df, label, **ipd_results.mode_parameterization(mode_id)
-            ):
-                skipped.append(index)
-                continue
             try:
                 _compute_into(df, label, mode_id)
             except IpdError as exc:
@@ -226,12 +245,18 @@ def compute_system(upload_id, slug, mode_id):
             "mode": mode_id,
             "label": ipd_results.mode_label(mode_id),
             "computed": computed,
-            "skipped": skipped,
+            # Kept as an empty compatibility field for callers of the previous fill-missing
+            # behavior; this endpoint no longer skips stored frames.
+            "skipped": [],
             "failed": failed,
-            # Availability per frame, in frame order. No histories: this is the summary that
-            # lets the UI light up its timeline, not the payload it draws from.
+            # No histories: this is the refreshed summary that lights the timeline and updates
+            # Plotly from the same in-memory trajectory. Histories remain lazy per frame/mode.
             "frames": [
-                {"frame_index": int(frame["frame_index"]), "ipd": frame["ipd"]}
+                {
+                    "frame_index": int(frame["frame_index"]),
+                    "ipd": frame["ipd"],
+                    "energies": frame.get("energies", {}),
+                }
                 for frame in refreshed["frames"]
             ],
         }

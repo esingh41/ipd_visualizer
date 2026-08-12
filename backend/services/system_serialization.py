@@ -180,6 +180,25 @@ def _monomer_array(row, columns, shape):
     return np.concatenate(parts, axis=0)
 
 
+def _ipd_inputs_usable(row):
+    """Whether this row's required IPD cells contain finite numeric values.
+
+    Dataset-level feature availability deliberately answers from column names, but one bad cell
+    must not advertise its frame as computable. Bare-ion NENCI rows, for example, have all the
+    required columns while storing ``[NaN]`` in an isolated-monomer volume-ratio cell.
+    Shape errors remain the kernel's responsibility and become a per-frame compute failure; this
+    inexpensive check catches the missing/non-numeric values that can be identified at save time.
+    """
+    for column in dataframe_schema.FEATURE_REQUIREMENTS["ipd_computable"]:
+        try:
+            value = np.asarray(row.get(column), dtype=float)
+        except (TypeError, ValueError):
+            return False
+        if value.size == 0 or not np.isfinite(value).all():
+            return False
+    return True
+
+
 def _multipole_arrays(row, n_atoms, n_atoms_A):
     """Per-atom MBIS multipoles for one frame, isolated-monomer beside in-dimer.
 
@@ -261,8 +280,8 @@ def _frame_payload(df, frame, *, ipd_computable, energy_catalog):
         payload["multipoles"] = _multipole_arrays(
             row, int(geometry["n_atoms"]), int(geometry["n_atoms_A"])
         )
-        # Availability and iteration counts only. The histories themselves are lazy-loaded per
-        # frame and mode: a run that hits the SCF iteration cap is ~150 KB on its own, and
+        # Availability, iteration counts and maximum magnitude only. The histories themselves
+        # are lazy-loaded per frame and mode: a run that hits the SCF iteration cap is ~150 KB, and
         # inlining every one of them would scale the trajectory payload by
         # frames x modes x iterations x atoms.
         payload["ipd"] = ipd_results.frame_ipd_metadata(
@@ -270,7 +289,7 @@ def _frame_payload(df, frame, *, ipd_computable, energy_catalog):
             row_label,
             n_atoms=int(geometry["n_atoms"]),
             n_atoms_A=int(geometry["n_atoms_A"]),
-            computable=ipd_computable,
+            computable=ipd_computable and _ipd_inputs_usable(row),
         )
     return payload
 

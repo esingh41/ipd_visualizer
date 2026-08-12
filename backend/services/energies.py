@@ -23,7 +23,7 @@ thing it still owns is how a curve *looks*.
 
 Two sources feed the catalog, kept apart on purpose:
 
-* **Uploaded columns**, recognised by name via ``dataframe_schema.classify_energy_column``.
+* **Uploaded columns**, selected from ordered ``dataframe_schema.ENERGY_DEFINITIONS``.
 * **IPD results**, which have no fixed column name to recognise -- ``thole_damping`` constructs
   it from the parameterization. So those entries are built from ``ipd_results.MODES``, asking
   ``thole_damping`` for the name, and carry the parameterization as fields rather than as text
@@ -104,17 +104,20 @@ def energy_catalog(columns):
     Takes column names rather than a dataframe: what a dataset *can* plot is a question about
     its vocabulary, and answering it should not require loading rows.
 
-    Order is meaningful and is not the dataframe's. Within a level a total comes before the
-    terms decomposing it, which is the order ``INDUCTION_ENERGY_COLUMNS`` declares, so
-    iterating the map rather than the columns gets it for free. Then the three families are
-    laid out reference-first: SAPT benchmarks, this app's IPD predictions, and anything else.
+    Order is meaningful and is not the dataframe's. ``ENERGY_DEFINITIONS`` declares each
+    level's display order and chooses at most one accepted source per stable id. Then families
+    are laid out reference-first: SAPT benchmarks, this app's IPD predictions, and anything
+    else.
     """
     columns = {dataframe_schema.canonical_name(name) for name in columns}
 
     uploaded = [
-        dataframe_schema.classify_energy_column(name)
-        for name in dataframe_schema.INDUCTION_ENERGY_COLUMNS
-        if name in columns
+        entry
+        for definition in dataframe_schema.ENERGY_DEFINITIONS
+        if (
+            entry := dataframe_schema.classify_energy_definition(definition, columns)
+        )
+        is not None
     ]
 
     return (
