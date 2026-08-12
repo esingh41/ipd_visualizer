@@ -160,7 +160,9 @@ function inductionDefaultSelection(entries) {
   const reference = entries.find(
     (entry) => entry.family === "sapt" && entry.role === "total",
   );
-  const models = entries.filter((entry) => entry.family === "ipd");
+  const models = entries.filter(
+    (entry) => entry.family === "ipd" || entry.id === "mtp_ind_half",
+  );
   return new Set([
     ...(reference ? [reference.id] : []),
     ...models.map((entry) => entry.id),
@@ -401,6 +403,7 @@ function createPlotView({
 
   function setTrajectory(loaded) {
     trajectory = loaded;
+    const previouslyAvailable = new Set(series.map((entry) => entry.id));
     ({ series, groups, axis: currentAxis } = buildSeries(
       loaded.frames,
       loaded.energy_catalog,
@@ -410,10 +413,19 @@ function createPlotView({
     const equilibrium = equilibriumMark(loaded.frames, currentAxis ?? X_SEPARATION);
     layout = buildLayout(currentAxis ?? X_SEPARATION, equilibrium, yAxisTitle);
 
-    // Preserve comparable selections across systems. Restore defaults only when none survive.
+    // Preserve comparable selections across systems. Newly introduced default curves (for
+    // example Delta-MTP after an in-page computation) are selected once, while a user's later
+    // manual deselection survives refreshes because the id is no longer new.
     const available = new Set(series.map((entry) => entry.id));
     const kept = [...selected].filter((id) => available.has(id));
-    selected = kept.length ? new Set(kept) : defaultSelection(series);
+    const defaults = defaultSelection(series);
+    const introducedDefaults = [...defaults].filter(
+      (id) => !previouslyAvailable.has(id),
+    );
+    selected =
+      kept.length || introducedDefaults.length
+        ? new Set([...kept, ...introducedDefaults])
+        : defaults;
 
     buildCurveList();
     draw();

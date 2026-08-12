@@ -15,9 +15,8 @@ const SPHERE_SCALE = 0.15;
 const STICK_RADIUS = 0.55 * SPHERE_SCALE;
 const FRAME_INTERVAL_MS = 500;
 
-// Arrow geometry, ported from molview.js in the previous frontend, where it was in turn ported
-// from _arrow_cgo (pymol_dipole.py) and verified to reproduce PyMOL to floating-point
-// precision. Changing these changes the scientific reading of the picture.
+// Arrow geometry ported from _arrow_cgo (pymol_dipole.py) and verified to reproduce PyMOL to
+// floating-point precision. Changing these changes the scientific reading of the picture.
 const DEFAULT_ARROW_LEN = 2.0; // Angstrom, the longest arrow in the whole trajectory
 const MIN_MU = 1e-6; // below this an arrow is skipped entirely
 const CONE_OVERSHOOT = 1.3; // total arrow length is CONE_OVERSHOOT * scale * |mu|
@@ -78,6 +77,8 @@ let ipdHistoryGenerations = new Map();
 let ipdIterationMemory = new Map();
 let ipdFailedFrames = new Map();
 let ipdComputeInFlight = false;
+let deltaMtpCapability = null;
+let deltaMtpComputeInFlight = false;
 
 const el = (id) => document.getElementById(id);
 
@@ -103,7 +104,6 @@ async function callJson(url, options) {
 // stick at every separation up to 1.10 Re. The two monomers of a dimer are non-bonded by
 // construction, so any bond crossing the A/B boundary is an artefact of that guess.
 //
-// Ported from molview.js in the previous frontend, where it was worked out originally.
 // Bonds are assigned once when the model is parsed and re-read from atom.bonds on every
 // setStyle, so deleting them here -- before the first setStyle -- is all it takes.
 function stripIntermonomerBonds(model, nAtomsA, nAtoms) {
@@ -665,9 +665,7 @@ function updateArrowScaleReadout() {
   updatePermanentArrowScaleReadout("arrow-scale", "arrow-scale-readout");
 }
 
-// Takes its viewer, its scale and the array to record handles in, so one arrow convention
-// serves both viewers. molview.js in the previous frontend was written this way for the same
-// reason -- "every function takes its viewer, so a page may own more than one" -- and the
+// Takes its viewer, scale, and handle array so one arrow convention serves both viewers; the
 // PyMOL-faithful geometry below must exist exactly once whatever draws it.
 function addDipoleArrows(target, coords, vectors, color, scale, sink) {
   for (let i = 0; i < vectors.length; i += 1) {
@@ -990,6 +988,7 @@ function currentIpdHistory() {
 // Manages availability text and display state synchronously. The damping selector remains
 // trajectory-wide and visible even when the selected separation has no result.
 function renderIpdSection(frame) {
+  renderDeltaMtpControls(frame);
   const message = el("ipd-message");
   const controls = el("ipd-controls");
   const display = el("ipd-display");
@@ -1347,7 +1346,7 @@ function toggleIpdPlayback() {
 
 // --- IPD computation --------------------------------------------------------
 
-function ipdUrl(suffix) {
+function systemUrl(suffix) {
   const uploadId = el("collection-select").value;
   const slug = el("system-select").value;
   return (
@@ -1404,7 +1403,7 @@ async function computeIpd() {
   setStatus(`Computing ${mode} for frame ${frame.frame_index + 1}…`);
   let result;
   try {
-    result = await callJson(ipdUrl(`/frames/${frame.frame_index}/ipd`), {
+    result = await callJson(systemUrl(`/frames/${frame.frame_index}/ipd`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
@@ -1456,7 +1455,7 @@ async function computeIpdForTrajectory() {
   setStatus(`Computing ${mode} for all ${trajectory.frames.length} frames…`);
   let result;
   try {
-    result = await callJson(ipdUrl("/ipd"), {
+    result = await callJson(systemUrl("/ipd"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
@@ -1501,6 +1500,158 @@ async function computeIpdForTrajectory() {
     `${result.label}: ${parts.join(", ")}${firstFailure ? `. ${firstFailure}` : ""}`,
     result.failed.length > 0
   );
+}
+
+// --- Delta-MTP computation --------------------------------------------------
+
+function renderDeltaMtpControls(frame) {
+  const controls = el("delta-mtp-controls");
+  const message = el("delta-mtp-message");
+  const compute = el("delta-mtp-compute");
+  const computeAll = el("delta-mtp-compute-all");
+
+  if (!frame?.delta_mtp) {
+    controls.hidden = true;
+    message.hidden = true;
+    return;
+  }
+
+  controls.hidden = false;
+  const stored = Boolean(frame.delta_mtp.stored);
+  const anyComputable = currentTrajectory?.frames.some(
+    (entry) => entry.delta_mtp?.computable
+  );
+  const serverAvailable = deltaMtpCapability?.available === true;
+  compute.disabled =
+    deltaMtpComputeInFlight || stored || !frame.delta_mtp.computable || !serverAvailable;
+  compute.textContent = stored ? "Computed" : "Compute Delta-MTP";
+  computeAll.disabled =
+    deltaMtpComputeInFlight || !anyComputable || !serverAvailable;
+
+  if (deltaMtpCapability === null) {
+    message.textContent = "Checking whether this server can compute Delta-MTP…";
+    message.hidden = false;
+  } else if (!serverAvailable) {
+    message.textContent = deltaMtpCapability.reason || "Delta-MTP is unavailable on this server.";
+    message.hidden = false;
+  } else if (frame.delta_mtp.problem) {
+    message.textContent = frame.delta_mtp.problem;
+    message.hidden = false;
+  } else if (!frame.delta_mtp.computable && !stored) {
+    message.textContent =
+      "Delta-MTP is unavailable for this frame because one or more of its nine A/B/dimer multipole inputs are missing, non-finite, or incorrectly shaped.";
+    message.hidden = false;
+  } else {
+    message.hidden = true;
+  }
+}
+
+function setDeltaMtpComputeState(inFlight, { allFrames = false } = {}) {
+  deltaMtpComputeInFlight = inFlight;
+  renderDeltaMtpControls(selectedFrame());
+  if (inFlight) {
+    el("delta-mtp-compute").textContent = "Computing…";
+    if (allFrames) {
+      el("delta-mtp-compute-all").textContent = "Computing all frames…";
+    }
+  } else {
+    el("delta-mtp-compute-all").textContent = "Compute Delta-MTP for all frames";
+  }
+}
+
+function applyDeltaMtpResult(frame, entry) {
+  frame.delta_mtp = entry.delta_mtp;
+  frame.energies = entry.energies;
+}
+
+function refreshDeltaMtpConsumers(trajectory, energyCatalog) {
+  trajectory.energy_catalog = energyCatalog;
+  renderDeltaMtpControls(selectedFrame());
+  plots.setTrajectory(trajectory);
+}
+
+async function computeDeltaMtp() {
+  const trajectory = currentTrajectory;
+  const frame = selectedFrame();
+  if (!frame || deltaMtpComputeInFlight || frame.delta_mtp?.stored) {
+    return;
+  }
+
+  setDeltaMtpComputeState(true);
+  setStatus(`Computing Delta-MTP for frame ${frame.frame_index + 1}…`);
+  let result;
+  try {
+    result = await callJson(systemUrl(`/frames/${frame.frame_index}/delta-mtp`), {
+      method: "POST",
+    });
+  } finally {
+    setDeltaMtpComputeState(false);
+  }
+
+  if (trajectory !== currentTrajectory || !result) {
+    return;
+  }
+  applyDeltaMtpResult(frame, result);
+  refreshDeltaMtpConsumers(trajectory, result.energy_catalog);
+  setStatus(`Delta-MTP computed for frame ${frame.frame_index + 1}.`);
+}
+
+async function computeDeltaMtpForTrajectory() {
+  const trajectory = currentTrajectory;
+  if (!trajectory || deltaMtpComputeInFlight) {
+    return;
+  }
+
+  const storedCount = trajectory.frames.filter(
+    (frame) => frame.delta_mtp?.stored
+  ).length;
+  if (
+    storedCount > 0 &&
+    !window.confirm(
+      `Compute Delta-MTP for all frames will replace ${storedCount} stored result(s). Continue?`
+    )
+  ) {
+    return;
+  }
+
+  setDeltaMtpComputeState(true, { allFrames: true });
+  setStatus(`Computing Delta-MTP for all ${trajectory.frames.length} frames…`);
+  let result;
+  try {
+    result = await callJson(systemUrl("/delta-mtp"), { method: "POST" });
+  } finally {
+    setDeltaMtpComputeState(false);
+  }
+
+  if (trajectory !== currentTrajectory || !result) {
+    return;
+  }
+  for (const entry of result.frames) {
+    const frame = trajectory.frames.find(
+      (candidate) => Number(candidate.frame_index) === Number(entry.frame_index)
+    );
+    if (frame) {
+      applyDeltaMtpResult(frame, entry);
+    }
+  }
+  refreshDeltaMtpConsumers(trajectory, result.energy_catalog);
+
+  const parts = [`${result.computed.length} computed`];
+  if (result.failed.length) parts.push(`${result.failed.length} failed`);
+  const firstFailure = result.failed[0]?.error;
+  setStatus(
+    `Delta-MTP: ${parts.join(", ")}${firstFailure ? `. ${firstFailure}` : ""}`,
+    result.failed.length > 0
+  );
+}
+
+async function loadDeltaMtpCapability() {
+  try {
+    deltaMtpCapability = await callJson("/api/delta-mtp/capability");
+  } catch (error) {
+    deltaMtpCapability = { available: false, reason: error.message };
+  }
+  renderDeltaMtpControls(selectedFrame());
 }
 
 // --- loading ----------------------------------------------------------------
@@ -1741,6 +1892,11 @@ function init() {
   );
   el("ipd-compute").addEventListener("click", guard(computeIpd));
   el("ipd-compute-all").addEventListener("click", guard(computeIpdForTrajectory));
+  el("delta-mtp-compute").addEventListener("click", guard(computeDeltaMtp));
+  el("delta-mtp-compute-all").addEventListener(
+    "click",
+    guard(computeDeltaMtpForTrajectory)
+  );
   el("ipd-play").addEventListener("click", toggleIpdPlayback);
   // Arrows only -- the geometry has not changed, and redrawing it would reset the camera.
   el("ipd-arrow-scale").addEventListener("input", () => {
@@ -1752,6 +1908,7 @@ function init() {
   });
 
   guard(loadCollections)();
+  guard(loadDeltaMtpCapability)();
 }
 
 init();

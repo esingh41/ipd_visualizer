@@ -5,11 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>IPD Visualizer</title>
     <link rel="stylesheet" href="/viewer.css" />
-    <!-- Unpinned, matching what index_old.html has always loaded. Pinning this to a
-         confirmed release is a follow-up. -->
+    <!-- 3Dmol is currently unpinned; pinning it to a confirmed release is follow-up work. -->
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
-    <!-- Pinned, as index_old.html pins it. "basic" carries scatter, shapes and annotations,
-         which is everything the Plots tab draws. -->
+    <!-- Plotly basic carries scatter, shapes and annotations, everything the Plots tab draws. -->
     <script src="https://cdn.plot.ly/plotly-basic-2.35.2.min.js" charset="utf-8"></script>
     <script type="module" src="/viewer.js"></script>
   </head>
@@ -123,7 +121,10 @@
 
             <section class="requirements-section" aria-labelledby="requirements-ipd">
               <h2 id="requirements-ipd">IPD computation</h2>
-              <p>Each row needs all eight isolated-monomer input columns:</p>
+              <p>
+                Each row needs all eight isolated-monomer input columns. IPD uses volume
+                ratios but does not use dimer multipoles:
+              </p>
               <ul class="ipd-column-list column-list">
                 <li><code>q hf/adz A</code></li>
                 <li><code>q hf/adz B</code></li>
@@ -140,6 +141,33 @@
                 <code>3 &times; 3</code> tensor. Dimer columns are not required for IPD.
                 Computation also requires a compatible <code>apnet_pt</code> installation on
                 the server; volume ratios alone are not sufficient.
+              </p>
+            </section>
+
+            <section class="requirements-section" aria-labelledby="requirements-delta-mtp">
+              <h2 id="requirements-delta-mtp">Delta-MTP computation</h2>
+              <p>
+                Each row needs all nine charge, dipole, and quadrupole columns for isolated
+                monomers A/B and the dimer. Delta-MTP uses dimer multipoles but does not use
+                volume ratios:
+              </p>
+              <ul class="ipd-column-list column-list">
+                <li><code>q hf/adz A</code></li>
+                <li><code>q hf/adz B</code></li>
+                <li><code>q hf/adz dimer</code></li>
+                <li><code>mu hf/adz A</code></li>
+                <li><code>mu hf/adz B</code></li>
+                <li><code>mu hf/adz dimer</code></li>
+                <li><code>theta hf/adz A</code></li>
+                <li><code>theta hf/adz B</code></li>
+                <li><code>theta hf/adz dimer</code></li>
+              </ul>
+              <p>
+                Arrays must follow <code>qcel_molecule</code> atom order. Charges have shapes
+                <code>(n_A,)</code>, <code>(n_B,)</code>, and
+                <code>(n_A + n_B,)</code>; dipoles append <code>3</code>, and quadrupoles
+                append <code>3 &times; 3</code>. Computation requires the Delta-MTP multipole
+                kernel from a compatible <code>apnet_pt</code> installation.
               </p>
             </section>
           </div>
@@ -306,6 +334,15 @@
             <button id="ipd-compute" type="button">Compute IPD</button>
             <button id="ipd-compute-all" type="button">Compute all frames</button>
           </div>
+
+          <div id="delta-mtp-controls" class="ipd-controls" hidden>
+            <span class="compute-group-label">Delta-MTP</span>
+            <button id="delta-mtp-compute" type="button">Compute Delta-MTP</button>
+            <button id="delta-mtp-compute-all" type="button">
+              Compute Delta-MTP for all frames
+            </button>
+          </div>
+          <p id="delta-mtp-message" class="ipd-message" hidden></p>
 
           <section class="ipd-axis" aria-labelledby="ipd-separation-heading">
             <h3 id="ipd-separation-heading">Separation</h3>

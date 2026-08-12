@@ -3,8 +3,6 @@
 Routes do HTTP and nothing else: pull the request apart, call one service, answer. None of
 them knows how a collection is stored, and none reopens an uploaded dataframe -- the
 trajectory tab is served entirely from the JSON written at upload time.
-
-``app_old.py`` is the previous application, kept for reference. Its routes are gone.
 """
 
 from __future__ import annotations
@@ -13,8 +11,14 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from backend.services import capability, ipd_service, trajectory_service, upload_system
-from backend.services.errors import IpdError
+from backend.services import (
+    capability,
+    delta_mtp_service,
+    ipd_service,
+    trajectory_service,
+    upload_system,
+)
+from backend.services.errors import ComputationError, IpdError
 
 # Dimer dataframes with per-row molecules and multipoles run to a few hundred MB at most.
 # A cap keeps a mistyped upload from being read entirely into memory before it is rejected.
@@ -63,11 +67,10 @@ def create_app() -> Flask:
     def _not_found(exc):
         return jsonify({"error": str(exc)}), 404
 
-    @app.errorhandler(IpdError)
-    def _ipd_error(exc):
-        # Carries its own status: 400 for a bad mode, 404 for nothing computed, 503 when
-        # apnet_pt cannot run here. The body keeps the "error" key every other failure uses,
-        # so one client-side handler reads them all.
+    @app.errorhandler(ComputationError)
+    def _computation_error(exc):
+        # IPD and Delta-MTP carry their own status and a shared structured body, so one
+        # client-side handler reads dependency, input and kernel failures consistently.
         return jsonify(exc.to_dict()), exc.status
 
     @app.errorhandler(ValueError)
@@ -125,6 +128,22 @@ def create_app() -> Flask:
     @app.post("/api/uploads/<upload_id>/systems/<slug>/ipd")
     def compute_system_ipd(upload_id, slug):
         return jsonify(ipd_service.compute_system(upload_id, slug, _requested_mode()))
+
+    # --- Delta-MTP ----------------------------------------------------------
+
+    @app.get("/api/delta-mtp/capability")
+    def delta_mtp_capability():
+        return jsonify(capability.delta_mtp_capability())
+
+    @app.post(
+        "/api/uploads/<upload_id>/systems/<slug>/frames/<int:frame_index>/delta-mtp"
+    )
+    def compute_frame_delta_mtp(upload_id, slug, frame_index):
+        return jsonify(delta_mtp_service.compute(upload_id, slug, frame_index))
+
+    @app.post("/api/uploads/<upload_id>/systems/<slug>/delta-mtp")
+    def compute_system_delta_mtp(upload_id, slug):
+        return jsonify(delta_mtp_service.compute_system(upload_id, slug))
 
     return app
 

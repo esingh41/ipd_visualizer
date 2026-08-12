@@ -688,12 +688,18 @@ select:disabled {
   gap: 0.35rem;
 }
 
-.ipd-field > span {
+.ipd-field > span,
+.compute-group-label {
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.compute-group-label {
+  align-self: center;
+  min-width: 5.5rem;
 }
 
 .ipd-controls button {
@@ -712,14 +718,14 @@ select:disabled {
   cursor: default;
 }
 
-/* The IPD viewer is shorter than the main one: the tab also carries both named axes and its
-   computation controls. Its panel reuses the Trajectory viewer/sidebar layout. */
+/* The IPD viewer shares the main viewer's height so larger dimers and their induced-dipole
+   arrows remain inside the canvas. Its panel reuses the Trajectory viewer/sidebar layout. */
 .ipd-viewer-panel {
   margin-top: 1rem;
 }
 
 #ipd-viewer {
-  height: 20rem;
+  height: 26rem;
   margin-top: 0;
 }
 
