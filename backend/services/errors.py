@@ -1,27 +1,12 @@
-"""Structured API errors for the on-demand IPD workflow.
-
-Its own module so ``dataset_store`` and ``ipd_compute`` can both raise these without
-importing each other, and so nothing here needs Flask.
-
-The existing routes answer with a bare ``{"error": "..."}``; this keeps that key so
-``callJson()`` in the frontend still finds a message, and adds the fields the sidebar
-needs to decide what to *show*: which columns are missing, whether the user can fix it,
-and whether a retry is worth offering.
-"""
+"""Structured, Flask-independent errors for optional on-demand science features."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
 
-class IpdError(Exception):
-    """An IPD failure the frontend can render as something more useful than "500".
-
-    ``code`` is the stable machine-readable discriminator; ``message`` is the sentence a
-    user reads. ``retryable`` says whether pressing the button again could plausibly work
-    (a transient write conflict, yes; a missing column, no), and ``user_fixable`` whether
-    the fix is theirs to make (install apnet_pt, supply the column) rather than a bug.
-    """
+class ComputationError(Exception):
+    """A computation failure carrying stable API metadata for the frontend."""
 
     def __init__(
         self,
@@ -51,4 +36,15 @@ class IpdError(Exception):
         }
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"IpdError({self.code!r}, {self.message!r}, status={self.status})"
+        return (
+            f"{type(self).__name__}({self.code!r}, {self.message!r}, "
+            f"status={self.status})"
+        )
+
+
+class IpdError(ComputationError):
+    """A structured failure from IPD capability, input, history, or computation."""
+
+
+class DeltaMtpError(ComputationError):
+    """A structured failure from Delta-MTP capability, input, or computation."""

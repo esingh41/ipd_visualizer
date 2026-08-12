@@ -199,6 +199,55 @@ def _ipd_inputs_usable(row):
     return True
 
 
+def _delta_mtp_inputs_usable(row, n_atoms, n_atoms_A):
+    """Whether all nine Delta-MTP arrays are finite and atom-aligned for this frame."""
+    n_atoms_by_suffix = {"A": n_atoms_A, "B": n_atoms - n_atoms_A, "dimer": n_atoms}
+    tails = {"q": (), "mu": (3,), "theta": (3, 3)}
+    for prefix, tail in tails.items():
+        for suffix, count in n_atoms_by_suffix.items():
+            column = f"{prefix} hf/adz {suffix}"
+            try:
+                value = np.asarray(row.get(column), dtype=float)
+            except (TypeError, ValueError):
+                return False
+            if value.shape != (count,) + tail or not np.isfinite(value).all():
+                return False
+    return True
+
+
+def _delta_mtp_metadata(row, *, computable):
+    """Small per-frame Delta-MTP availability and stored-result summary."""
+    present, malformed = [], []
+    for column in dataframe_schema.DELTA_MTP_OUTPUT_COLUMNS:
+        if column not in row.index:
+            continue
+        raw = row.get(column)
+        missing = pd.isna(raw)
+        if isinstance(missing, (bool, np.bool_)) and missing:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            malformed.append(column)
+            continue
+        if np.isfinite(value):
+            present.append(column)
+        elif not np.isnan(value):
+            # NaN is pandas' ordinary marker for an output not computed on this row. Infinity
+            # can only be a damaged result and must not masquerade as simply absent.
+            malformed.append(column)
+
+    stored = len(present) == len(dataframe_schema.DELTA_MTP_OUTPUT_COLUMNS)
+    problem = None
+    if malformed or (present and not stored):
+        problem = "The stored Delta-MTP result is incomplete or contains non-finite values."
+    return {
+        "computable": bool(computable),
+        "stored": stored,
+        "problem": problem,
+    }
+
+
 def _multipole_arrays(row, n_atoms, n_atoms_A):
     """Per-atom MBIS multipoles for one frame, isolated-monomer beside in-dimer.
 
@@ -225,7 +274,9 @@ def _multipole_arrays(row, n_atoms, n_atoms_A):
     return multipoles
 
 
-def _frame_payload(df, frame, *, ipd_computable, energy_catalog):
+def _frame_payload(
+    df, frame, *, ipd_computable, delta_mtp_computable, energy_catalog
+):
     """One frame of a trajectory, as the frontend receives it.
 
     Takes the whole dataframe rather than just the row because IPD availability is read
@@ -267,6 +318,7 @@ def _frame_payload(df, frame, *, ipd_computable, energy_catalog):
         # there is nothing either can emit honestly.
         payload["multipoles"] = None
         payload["ipd"] = None
+        payload["delta_mtp"] = None
     else:
         payload.update(
             {
@@ -290,6 +342,15 @@ def _frame_payload(df, frame, *, ipd_computable, energy_catalog):
             n_atoms=int(geometry["n_atoms"]),
             n_atoms_A=int(geometry["n_atoms_A"]),
             computable=ipd_computable and _ipd_inputs_usable(row),
+        )
+        payload["delta_mtp"] = _delta_mtp_metadata(
+            row,
+            computable=(
+                delta_mtp_computable
+                and _delta_mtp_inputs_usable(
+                    row, int(geometry["n_atoms"]), int(geometry["n_atoms_A"])
+                )
+            ),
         )
     return payload
 
@@ -323,6 +384,7 @@ def save_collection(
                 df,
                 frame,
                 ipd_computable=features["ipd_computable"],
+                delta_mtp_computable=features["delta_mtp_computable"],
                 energy_catalog=catalog,
             )
             for frame in trajectory["frames"]

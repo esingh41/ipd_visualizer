@@ -1,6 +1,6 @@
 """Stored IPD results, translated into what the browser draws.
 
-The third responsibility in ``IPD_visualization.md``'s split::
+The translation layer between stored scientific results and the browser::
 
     dataframe_schema  -> uploaded input vocabulary
     thole_damping     -> IPD result vocabulary and computation
@@ -22,8 +22,7 @@ frames x modes x iterations x atoms x 3:
     200-iteration cap on a 13-atom dimer it is ~150 KB on its own.
 
 **Only ``thole_damping``'s column names are read.** Uploaded pickles may carry histories under
-``radius_thole``'s older names -- ``IPD (MBIS) 0.39 all`` and friends -- and those are ignored
-on purpose. Every history this app shows is one it computed and filed under a name that states
+older names -- ``IPD (MBIS) 0.39 all`` and friends -- and those are ignored on purpose. Every history this app shows is one it computed and filed under a name that states
 its own parameterization, so a displayed result can always be traced to the choices that made
 it.
 """
@@ -35,8 +34,8 @@ import numpy as np
 from backend.services import system_processing, thole_damping
 from backend.services.errors import IpdError
 
-# The damping modes the UI offers, named as IPD_visualization.md names them: universal Thole
-# 0.39, or the TS-vdW radius combination rule on the intermolecular edges only.
+# The damping modes the UI offers: universal Thole 0.39, or the TS-vdW radius combination
+# rule on the intermolecular edges only.
 #
 # The single place a mode id, its label and its thole_damping arguments meet. `parameterization`
 # splats into ipd_column_names, has_ipd_result, read_ipd_row, write_ipd_row and compute_ipd_row

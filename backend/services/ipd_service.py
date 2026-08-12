@@ -24,15 +24,13 @@ first's result -- with no error, and no way to tell afterwards.
 
 from __future__ import annotations
 
-import threading
-
 import numpy as np
 
 from backend.services import (
     capability,
+    collection_update,
     dataframe_schema,
     ipd_results,
-    system_processing,
     system_serialization,
     thole_damping,
     trajectory_service,
@@ -41,51 +39,6 @@ from backend.services.errors import IpdError
 
 NotFound = trajectory_service.NotFound
 
-_LOCKS = {}
-_LOCKS_GUARD = threading.Lock()
-
-
-def _lock_for(upload_id):
-    """One lock per collection, created on demand.
-
-    Per collection rather than one global lock so a long run on one upload does not block
-    reads or computes on another. The guard exists only to make the dict insertion itself
-    thread-safe.
-    """
-    with _LOCKS_GUARD:
-        return _LOCKS.setdefault(str(upload_id), threading.Lock())
-
-
-# --- locating a frame -------------------------------------------------------
-
-
-def _frame_entry(upload_id, slug, frame_index):
-    """The stored frame payload at this animation position.
-
-    Searched by ``frame_index`` rather than indexed by it. They agree today -- grouping assigns
-    0..n-1 in order -- but the list position and the field carrying that number are two
-    different claims, and only one of them is the identifier the URL names.
-    """
-    system = trajectory_service.get_trajectory(upload_id, slug)
-    for frame in system["frames"]:
-        if int(frame["frame_index"]) == int(frame_index):
-            return system, frame
-    raise NotFound(
-        f"No frame {frame_index} in system {slug!r} of upload {upload_id!r}; "
-        f"it has {len(system['frames'])} frames."
-    )
-
-
-def _row_label(df, frame):
-    """The dataframe label for a stored frame's ``row_index`` position."""
-    position = int(frame["row_index"])
-    if not 0 <= position < len(df):
-        raise NotFound(
-            f"Frame {frame['frame_index']} refers to row {position}, which is outside the "
-            f"stored dataframe's {len(df)} rows."
-        )
-    return df.index[position]
-
 
 # --- reading ----------------------------------------------------------------
 
@@ -93,9 +46,11 @@ def _row_label(df, frame):
 def get_history(upload_id, slug, frame_index, mode_id):
     """One frame's stored induced-dipole history for one damping mode."""
     ipd_results.mode_parameterization(mode_id)  # reject a bad mode before touching disk
-    _, frame = _frame_entry(upload_id, slug, frame_index)
+    _, frame = collection_update.frame_entry(upload_id, slug, frame_index)
     df = system_serialization.load_processed(upload_id)
-    return ipd_results.frame_ipd_history(df, _row_label(df, frame), mode_id)
+    return ipd_results.frame_ipd_history(
+        df, collection_update.row_label(df, frame), mode_id
+    )
 
 
 # --- computing --------------------------------------------------------------
@@ -160,29 +115,6 @@ def _compute_into(df, label, mode_id):
     thole_damping.write_ipd_row(df, label, result, **parameterization)
 
 
-def _persist(upload_id, df):
-    """Rewrite the collection from a modified dataframe, returning the fresh manifest.
-
-    Re-runs ``save_collection`` rather than patching the affected frame's JSON in place. That
-    costs a full rewrite of the collection's files, but it means there is exactly one code path
-    producing a stored collection -- a second, partial one could disagree with it and the
-    disagreement would be invisible.
-
-    ``add_derived_columns`` is deliberately *not* re-run: ``processed.pkl`` already carries its
-    output, and re-running it is the one way a contact distance could be recomputed from a
-    geometry that has since been normalized.
-    """
-    manifest = system_serialization.load_manifest(upload_id)
-    return system_serialization.save_collection(
-        upload_id,
-        df,
-        system_processing.group_trajectories(df),
-        source_filename=manifest["source_filename"],
-        display_name=manifest.get("display_name"),
-        validation=manifest.get("validation"),
-    )
-
-
 def compute(upload_id, slug, frame_index, mode_id):
     """Run one frame and one mode, persist it, and return it ready to display.
 
@@ -191,15 +123,15 @@ def compute(upload_id, slug, frame_index, mode_id):
     """
     capability.require_capability()
     ipd_results.mode_parameterization(mode_id)
-    _, frame = _frame_entry(upload_id, slug, frame_index)
+    _, frame = collection_update.frame_entry(upload_id, slug, frame_index)
 
-    with _lock_for(upload_id):
+    with collection_update.lock_for(upload_id):
         df = system_serialization.load_processed(upload_id)
-        label = _row_label(df, frame)
+        label = collection_update.row_label(df, frame)
         _compute_into(df, label, mode_id)
-        _persist(upload_id, df)
+        collection_update.persist(upload_id, df)
 
-        _, refreshed = _frame_entry(upload_id, slug, frame_index)
+        _, refreshed = collection_update.frame_entry(upload_id, slug, frame_index)
         return {
             "frame_index": int(frame_index),
             "ipd": refreshed["ipd"],
@@ -223,13 +155,13 @@ def compute_system(upload_id, slug, mode_id):
     ipd_results.mode_parameterization(mode_id)
     system = trajectory_service.get_trajectory(upload_id, slug)
 
-    with _lock_for(upload_id):
+    with collection_update.lock_for(upload_id):
         df = system_serialization.load_processed(upload_id)
 
         computed, failed = [], []
         for frame in system["frames"]:
             index = int(frame["frame_index"])
-            label = _row_label(df, frame)
+            label = collection_update.row_label(df, frame)
             try:
                 _compute_into(df, label, mode_id)
             except IpdError as exc:
@@ -238,7 +170,7 @@ def compute_system(upload_id, slug, mode_id):
             computed.append(index)
 
         if computed:
-            _persist(upload_id, df)
+            collection_update.persist(upload_id, df)
 
         refreshed = trajectory_service.get_trajectory(upload_id, slug)
         return {

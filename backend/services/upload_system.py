@@ -107,8 +107,8 @@ def _reserialize(collection_id, stored):
     the bytes the user just handed over would silently discard every IPD run they have paid
     for -- with no error, and nothing afterwards to say it happened.
 
-    ``add_derived_columns`` is deliberately not re-run, for the reason ``ipd_service._persist``
-    documents: the stored frame already carries its output, and re-running it is the one way a
+    ``add_derived_columns`` is deliberately not re-run, for the reason
+    ``collection_update.persist`` documents: the stored frame already carries its output, and re-running it is the one way a
     contact distance could be recomputed from a geometry that has since been normalized.
 
     Returns None rather than raising when the pickle is missing or unreadable, leaving the

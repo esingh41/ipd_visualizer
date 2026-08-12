@@ -23,7 +23,8 @@ thing it still owns is how a curve *looks*.
 
 Two sources feed the catalog, kept apart on purpose:
 
-* **Uploaded columns**, selected from ordered ``dataframe_schema.ENERGY_DEFINITIONS``.
+* **Fixed-name columns**, uploaded or app-computed (including Delta-MTP), selected from ordered
+  ``dataframe_schema.ENERGY_DEFINITIONS``.
 * **IPD results**, which have no fixed column name to recognise -- ``thole_damping`` constructs
   it from the parameterization. So those entries are built from ``ipd_results.MODES``, asking
   ``thole_damping`` for the name, and carry the parameterization as fields rather than as text
@@ -34,9 +35,9 @@ actually present. A dataset with one benchmark and no IPD is a complete catalog 
 not a degraded one.
 
 Only IPD results this app computed become curves. Uploads may carry induction energies under
-``radius_thole``'s older names -- ``IPD (MBIS) 0.39 all`` and friends -- and those are ignored,
-for the reason ``ipd_results`` states: a displayed result should be traceable to the choices
-that produced it, and those names do not say what they were.
+older names -- ``IPD (MBIS) 0.39 all`` and friends -- and those are ignored, for the reason
+``ipd_results`` states: a displayed result should be traceable to the choices that produced it,
+and those names do not say what they were.
 """
 
 from __future__ import annotations
@@ -111,7 +112,7 @@ def energy_catalog(columns):
     """
     columns = {dataframe_schema.canonical_name(name) for name in columns}
 
-    uploaded = [
+    fixed_name = [
         entry
         for definition in dataframe_schema.ENERGY_DEFINITIONS
         if (
@@ -121,9 +122,9 @@ def energy_catalog(columns):
     ]
 
     return (
-        [entry for entry in uploaded if entry["family"] == "sapt"]
+        [entry for entry in fixed_name if entry["family"] == "sapt"]
         + _ipd_entries(columns)
-        + [entry for entry in uploaded if entry["family"] != "sapt"]
+        + [entry for entry in fixed_name if entry["family"] != "sapt"]
     )
 
 

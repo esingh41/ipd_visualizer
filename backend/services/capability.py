@@ -1,9 +1,9 @@
-"""Can this server run an IPD calculation, and if not, why not.
+"""Can this server run its optional IPD and Delta-MTP kernels, and if not, why not.
 
-One question, answered once. Nothing here opens a dataframe -- whether a *frame* carries the
-inputs an IPD run needs is a different question, answered by ``dataframe_schema``'s
-``ipd_computable`` feature. The two fail independently and deserve different sentences: "this
-build of apnet_pt cannot do it" is not "this frame does not have the inputs".
+Each server capability is answered and cached independently. Nothing here opens a dataframe --
+whether a *frame* carries a feature's inputs is a different question, answered by serialized
+frame metadata. Dependency compatibility and row computability fail independently and deserve
+different messages.
 
 The probe checks the SCF kernel's **argument names**, not a version string. apnet_pt
 self-reports ``0.0.1`` on every commit, while
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 
-from backend.services.errors import IpdError
+from backend.services.errors import DeltaMtpError, IpdError
 
 # The keyword arguments thole_damping.compute_ipd_row passes into
 # induced_dipole_induction_optimized_no_correction. Only the discriminating ones: the data
@@ -48,6 +48,9 @@ REQUIRED_IPD_KWARGS = (
 )
 
 _CAPABILITY = None
+_DELTA_MTP_CAPABILITY = None
+
+REQUIRED_DELTA_MTP_ARGS = ("mols", "dimer", "monA", "monB")
 
 
 def missing_ipd_kwargs(ipd_fn):
@@ -156,6 +159,88 @@ def require_capability():
         status=503,
         details={
             "missing_kwargs": cap["missing_kwargs"],
+            "apnet_pt_path": cap["path"],
+            "apnet_pt_version": cap["version"],
+        },
+        retryable=False,
+    )
+
+
+def _probe_delta_mtp_capability():
+    """Check only the multipole kernel Delta-MTP uses, independent of IPD's SCF API."""
+    try:
+        import apnet_pt
+        from apnet_pt.multipole import multipoles_elst_ind_dimer
+    except ImportError as exc:
+        return {
+            "available": False,
+            "code": "apnet_pt_missing",
+            "reason": (
+                "apnet_pt is not installed in the server's environment, so Delta-MTP "
+                f"cannot run. Original error: {exc}"
+            ),
+            "version": None,
+            "path": None,
+            "missing_args": [],
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "code": "apnet_pt_broken",
+            "reason": (
+                "apnet_pt is installed but its Delta-MTP multipole kernel failed to import. "
+                f"{type(exc).__name__}: {exc}"
+            ),
+            "version": None,
+            "path": None,
+            "missing_args": [],
+        }
+
+    parameters = inspect.signature(multipoles_elst_ind_dimer).parameters
+    missing = [name for name in REQUIRED_DELTA_MTP_ARGS if name not in parameters]
+    version = getattr(apnet_pt, "__version__", None)
+    path = getattr(apnet_pt, "__file__", None)
+    if missing:
+        return {
+            "available": False,
+            "code": "apnet_pt_delta_mtp_incompatible",
+            "reason": (
+                "The installed apnet_pt exposes an incompatible "
+                "multipoles_elst_ind_dimer kernel; required argument(s) are missing."
+            ),
+            "version": version,
+            "path": path,
+            "missing_args": missing,
+        }
+    return {
+        "available": True,
+        "code": None,
+        "reason": None,
+        "version": version,
+        "path": path,
+        "missing_args": [],
+    }
+
+
+def delta_mtp_capability(refresh=False):
+    """Whether this server can run the Delta-MTP multipole kernel."""
+    global _DELTA_MTP_CAPABILITY
+    if _DELTA_MTP_CAPABILITY is None or refresh:
+        _DELTA_MTP_CAPABILITY = _probe_delta_mtp_capability()
+    return dict(_DELTA_MTP_CAPABILITY)
+
+
+def require_delta_mtp_capability():
+    """Raise a structured 503 when the Delta-MTP kernel is unavailable."""
+    cap = delta_mtp_capability()
+    if cap["available"]:
+        return
+    raise DeltaMtpError(
+        cap["code"],
+        cap["reason"],
+        status=503,
+        details={
+            "missing_args": cap["missing_args"],
             "apnet_pt_path": cap["path"],
             "apnet_pt_version": cap["version"],
         },

@@ -34,9 +34,11 @@ numbers is ``energies``'s job.
 # 6: energy catalogs recognize the two valid AMOEBA+ polarization parameterizations.
 # 7: catalogs include raw SAPT interaction components and SAPT(DFT) entries.
 # 8: frame-level IPD computability also rejects missing/non-finite required cell values.
+# 9: frames carry Delta-MTP computability/result metadata and catalogs recognize all four
+#    Delta-MTP outputs.
 # Bumping this is what makes an already-stored collection reprocess instead of being returned
 # untouched -- see upload_system.process_upload.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 REQUIRED_COLUMNS = {
     "qcel_molecule",
@@ -57,7 +59,7 @@ MBIS_COLUMNS = {
     "q hf/adz dimer",
 
     # The *permanent* atomic dipole, an input. Not mu_ind, the induced dipole the viewer
-    # draws, which is an IPD result and named by radius_thole.
+    # draws, which is an IPD result and named by thole_damping.
     "mu hf/adz A",
     "mu hf/adz B",
     "mu hf/adz dimer",
@@ -398,11 +400,31 @@ ENERGY_DEFINITIONS = (
         "role": "component",
     },
 
-    # Classical undamped multipole induction models.
+    # Classical undamped Delta-MTP energies. The raw induction is the dimer-multipole
+    # electrostatics minus isolated-monomer electrostatics; its half-scaled form is the
+    # physically meaningful variational induction estimate.
+    {
+        "id": "mtp_elst",
+        "source_columns": ("mtp elst",),
+        "label": "Delta-MTP electrostatics (monomer)",
+        "category": "electrostatics",
+        "family": "mtp",
+        "level": None,
+        "role": "model",
+    },
+    {
+        "id": "mtp_elst_dimer",
+        "source_columns": ("mtp elst dimer",),
+        "label": "Delta-MTP electrostatics (dimer)",
+        "category": "electrostatics",
+        "family": "mtp",
+        "level": None,
+        "role": "model",
+    },
     {
         "id": "mtp_ind",
         "source_columns": ("mtp ind",),
-        "label": "Multipole induction",
+        "label": "Delta-MTP induction (unscaled)",
         "category": "induction",
         "family": "mtp",
         "level": None,
@@ -411,7 +433,7 @@ ENERGY_DEFINITIONS = (
     {
         "id": "mtp_ind_half",
         "source_columns": ("mtp ind / 2",),
-        "label": "Multipole induction / 2",
+        "label": "Delta-MTP induction",
         "category": "induction",
         "family": "mtp",
         "level": None,
@@ -497,7 +519,29 @@ FEATURE_REQUIREMENTS = {
         "volume ratios A",
         "volume ratios B",
     },
+
+    # Delta-MTP compares isolated-monomer electrostatics with electrostatics from the dimer
+    # multipoles. It therefore needs A, B, and dimer q/mu/theta arrays, but no volume ratios.
+    "delta_mtp_computable": {
+        "q hf/adz A",
+        "q hf/adz B",
+        "q hf/adz dimer",
+        "mu hf/adz A",
+        "mu hf/adz B",
+        "mu hf/adz dimer",
+        "theta hf/adz A",
+        "theta hf/adz B",
+        "theta hf/adz dimer",
+    },
 }
+
+
+DELTA_MTP_OUTPUT_COLUMNS = (
+    "mtp elst",
+    "mtp elst dimer",
+    "mtp ind",
+    "mtp ind / 2",
+)
 
 
 # Every column the app understands. A union of the sets above rather than a fourth list, so
@@ -550,7 +594,7 @@ def feature_availability(columns):
     """Which features these columns support, reporting every feature true or false.
 
     A false entry is what lets a tab explain itself instead of vanishing. Says nothing
-    about stored IPD history, whose column names come from radius_thole -- the IPD code
+    about stored IPD history, whose column names come from thole_damping -- the IPD code
     detects that where the question matters.
     """
     columns = {canonical_name(name) for name in columns}
