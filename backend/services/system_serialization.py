@@ -32,7 +32,9 @@ import pandas as pd
 
 from backend.services import dataframe_schema, energies, ipd_results, system_processing
 
-COLLECTIONS_DIR = Path(__file__).resolve().parents[2] / "data" / "systems"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+COLLECTIONS_DIR = REPOSITORY_ROOT / "data" / "systems"
+BUNDLED_COLLECTIONS_DIR = REPOSITORY_ROOT / "samples"
 
 MANIFEST_NAME = "manifest.json"
 PROCESSED_NAME = "processed.pkl"
@@ -41,16 +43,29 @@ SYSTEMS_DIRNAME = "systems"
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def collection_dir(collection_id):
-    """Where one collection's files live, refusing anything that escapes COLLECTIONS_DIR.
-
-    A collection id reaches here straight from a URL path segment, so this is the boundary
-    that stops ``../`` from reading or overwriting elsewhere on disk.
-    """
-    path = (COLLECTIONS_DIR / str(collection_id)).resolve()
-    if path.parent != COLLECTIONS_DIR.resolve():
+def _safe_collection_dir(root, collection_id):
+    """A collection below ``root``, rejecting URL ids that would escape it."""
+    path = (root / str(collection_id)).resolve()
+    if path.parent != root.resolve():
         raise ValueError(f"Invalid collection id: {collection_id!r}")
     return path
+
+
+def collection_dir(collection_id):
+    """Writable storage for an uploaded collection."""
+    return _safe_collection_dir(COLLECTIONS_DIR, collection_id)
+
+
+def collection_read_dir(collection_id):
+    """Persistent storage first, then an immutable sample bundled with the repository."""
+    persistent = collection_dir(collection_id)
+    if (persistent / MANIFEST_NAME).is_file():
+        return persistent
+
+    bundled = _safe_collection_dir(BUNDLED_COLLECTIONS_DIR, collection_id)
+    if (bundled / MANIFEST_NAME).is_file():
+        return bundled
+    return persistent
 
 
 # --- conversion -------------------------------------------------------------
@@ -448,8 +463,8 @@ def save_collection(
 
 
 def load_manifest(collection_id):
-    """A collection's manifest."""
-    path = collection_dir(collection_id) / MANIFEST_NAME
+    """A persistent upload or bundled sample's manifest."""
+    path = collection_read_dir(collection_id) / MANIFEST_NAME
     with open(path, encoding="utf-8") as handle:
         return json.load(handle)
 
@@ -463,7 +478,7 @@ def load_system(collection_id, name):
     manifest = load_manifest(collection_id)
     for entry in manifest["systems"]:
         if entry["name"] == name:
-            path = collection_dir(collection_id) / entry["file"]
+            path = collection_read_dir(collection_id) / entry["file"]
             with open(path, encoding="utf-8") as handle:
                 return json.load(handle)
     raise KeyError(f"No system named {name!r} in collection {collection_id!r}")
@@ -471,25 +486,30 @@ def load_system(collection_id, name):
 
 def load_processed(collection_id):
     """The normalized dataframe, for backend work that needs the full fidelity."""
-    return pd.read_pickle(collection_dir(collection_id) / PROCESSED_NAME)
+    return pd.read_pickle(collection_read_dir(collection_id) / PROCESSED_NAME)
 
 
 def list_collections():
-    """Every stored collection's manifest, newest first.
+    """Every persistent collection and bundled sample, newest first.
 
     A directory with no readable manifest is skipped rather than raising: manifest.json is
-    written last, so one half-written or corrupt collection must not empty the whole list.
+    written last for uploads, so one half-written or corrupt collection must not empty the
+    whole list. Persistent collections take precedence if an id appears in both roots.
     """
-    if not COLLECTIONS_DIR.is_dir():
-        return []
+    manifests_by_id = {}
+    for root in (BUNDLED_COLLECTIONS_DIR, COLLECTIONS_DIR):
+        if not root.is_dir():
+            continue
+        for directory in root.iterdir():
+            if not directory.is_dir():
+                continue
+            try:
+                with open(directory / MANIFEST_NAME, encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+                manifests_by_id[str(manifest["collection_id"])] = manifest
+            except (OSError, KeyError, ValueError, json.JSONDecodeError):
+                continue
 
-    manifests = []
-    for directory in COLLECTIONS_DIR.iterdir():
-        if not directory.is_dir():
-            continue
-        try:
-            manifests.append(load_manifest(directory.name))
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
+    manifests = list(manifests_by_id.values())
     manifests.sort(key=lambda manifest: manifest.get("created_at", ""), reverse=True)
     return manifests

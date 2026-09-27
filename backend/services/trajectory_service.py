@@ -81,7 +81,7 @@ def get_trajectory(upload_id, slug):
     manifest = _manifest(upload_id)
     for entry in manifest["systems"]:
         if _slug_of(entry) == slug:
-            path = system_serialization.collection_dir(upload_id) / entry["file"]
+            path = system_serialization.collection_read_dir(upload_id) / entry["file"]
             with open(path, encoding="utf-8") as handle:
                 return json.load(handle)
     raise NotFound(f"No system {slug!r} in upload {upload_id!r}")
