@@ -36,9 +36,11 @@ numbers is ``energies``'s job.
 # 8: frame-level IPD computability also rejects missing/non-finite required cell values.
 # 9: frames carry Delta-MTP computability/result metadata and catalogs recognize all four
 #    Delta-MTP outputs.
+# 10: systems carry optional binding-motif metadata and catalogs use the explicit
+#     run_saptdft.py SAPT(PBE0)-D4(i)/SAPT0-D4(i) vocabulary.
 # Bumping this is what makes an already-stored collection reprocess instead of being returned
 # untouched -- see upload_system.process_upload.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 REQUIRED_COLUMNS = {
     "qcel_molecule",
@@ -51,6 +53,13 @@ COLUMN_ALIASES = {
     "qcel molecule": "qcel_molecule",
     "qcel molecule A": "qcel_molecule A",
     "qcel molecule B": "qcel_molecule B",
+}
+
+# Optional row metadata. It never gates registration: grouping promotes a value to trajectory
+# metadata only when every frame agrees on one nonblank value.
+METADATA_COLUMNS = {
+    "binding_motif",
+    "source_dataset",
 }
 
 MBIS_COLUMNS = {
@@ -108,10 +117,12 @@ MULTIPOLE_QUANTITIES = {
 # exact source name, never by a "sapt" substring heuristic. IPD results remain absent because
 # thole_damping constructs their names and energies builds those entries from ipd_results.MODES.
 ENERGY_DEFINITIONS = (
-    # SAPT0 interaction total, its four raw category totals, then induction breakdown.
+    # Conventional SAPT0 interaction total, its four raw category totals, then induction
+    # breakdown. Keep this distinct from SAPT0-D4(i): run_saptdft.py's HF-level summary uses
+    # the empirical D4(i) dispersion, while these S66 columns carry SAPT0 dispersion.
     {
         "id": "sapt0_total",
-        "source_columns": ("SAPT0 TOTAL kcalmol", "SAPT0 TOTAL ENERGY adz"),
+        "source_columns": ("SAPT0 TOTAL kcalmol",),
         "label": "Total",
         "category": "interaction",
         "family": "sapt",
@@ -120,7 +131,7 @@ ENERGY_DEFINITIONS = (
     },
     {
         "id": "sapt0_elst",
-        "source_columns": ("SAPT0 ELST kcalmol", "SAPT0 ELST ENERGY adz"),
+        "source_columns": ("SAPT0 ELST kcalmol",),
         "label": "Electrostatics",
         "category": "electrostatics",
         "parent_category": "interaction",
@@ -130,7 +141,7 @@ ENERGY_DEFINITIONS = (
     },
     {
         "id": "sapt0_exch",
-        "source_columns": ("SAPT0 EXCH kcalmol", "SAPT0 EXCH ENERGY adz"),
+        "source_columns": ("SAPT0 EXCH kcalmol",),
         "label": "Exchange",
         "category": "exchange",
         "parent_category": "interaction",
@@ -140,7 +151,7 @@ ENERGY_DEFINITIONS = (
     },
     {
         "id": "sapt0_ind",
-        "source_columns": ("SAPT0 IND kcalmol", "SAPT0 INDU ENERGY adz"),
+        "source_columns": ("SAPT0 IND kcalmol",),
         "label": "Induction total",
         "category": "induction",
         "parent_category": "interaction",
@@ -150,11 +161,7 @@ ENERGY_DEFINITIONS = (
     },
     {
         "id": "sapt0_disp",
-        "source_columns": (
-            "SAPT0 DISP kcalmol",
-            "SAPT0 DISP ENERGY adz",
-            "D4 ENERGY adz",
-        ),
+        "source_columns": ("SAPT0 DISP kcalmol",),
         "label": "Dispersion",
         "category": "dispersion",
         "parent_category": "interaction",
@@ -164,7 +171,7 @@ ENERGY_DEFINITIONS = (
     },
     {
         "id": "sapt0_ind20r",
-        "source_columns": ("SAPT ind20,r kcalmol", "ind20,r_sapt0"),
+        "source_columns": ("SAPT ind20,r kcalmol",),
         "label": "ind20,r",
         "category": "induction",
         "family": "sapt",
@@ -173,10 +180,7 @@ ENERGY_DEFINITIONS = (
     },
     {
         "id": "sapt0_exch_ind20r",
-        "source_columns": (
-            "SAPT exch-ind20,r kcalmol",
-            "exch-ind20,r_sapt0",
-        ),
+        "source_columns": ("SAPT exch-ind20,r kcalmol",),
         "label": "exch-ind20,r",
         "category": "induction",
         "family": "sapt",
@@ -185,11 +189,90 @@ ENERGY_DEFINITIONS = (
     },
     {
         "id": "sapt0_dhf",
-        "source_columns": ("SAPT dHF ind kcalmol", "delta hf correction"),
+        "source_columns": ("SAPT dHF ind kcalmol",),
         "label": "δHF",
         "category": "induction",
         "family": "sapt",
         "level": "SAPT0",
+        "role": "component",
+    },
+
+    # SAPT0-D4(i) emitted by run_saptdft.py. These explicit names are canonical; unlike
+    # conventional SAPT0 above, this level shares the D4(i) dispersion with SAPT(PBE0)-D4(i).
+    {
+        "id": "sapt0_d4i_total",
+        "source_columns": ("SAPT0-D4(i) TOTAL kcalmol",),
+        "label": "Total",
+        "category": "interaction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
+        "role": "total",
+    },
+    {
+        "id": "sapt0_d4i_elst",
+        "source_columns": ("SAPT0-D4(i) ELST kcalmol",),
+        "label": "Electrostatics",
+        "category": "electrostatics",
+        "parent_category": "interaction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
+        "role": "total",
+    },
+    {
+        "id": "sapt0_d4i_exch",
+        "source_columns": ("SAPT0-D4(i) EXCH kcalmol",),
+        "label": "Exchange",
+        "category": "exchange",
+        "parent_category": "interaction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
+        "role": "total",
+    },
+    {
+        "id": "sapt0_d4i_ind",
+        "source_columns": ("SAPT0-D4(i) INDU kcalmol",),
+        "label": "Induction total",
+        "category": "induction",
+        "parent_category": "interaction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
+        "role": "total",
+    },
+    {
+        "id": "sapt0_d4i_disp",
+        "source_columns": ("SAPT0-D4(i) DISP kcalmol",),
+        "label": "Dispersion",
+        "category": "dispersion",
+        "parent_category": "interaction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
+        "role": "total",
+    },
+    {
+        "id": "sapt0_d4i_ind20r",
+        "source_columns": ("SAPT0-D4(i) ind20,r kcalmol",),
+        "label": "ind20,r",
+        "category": "induction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
+        "role": "component",
+    },
+    {
+        "id": "sapt0_d4i_exch_ind20r",
+        "source_columns": ("SAPT0-D4(i) exch-ind20,r kcalmol",),
+        "label": "exch-ind20,r",
+        "category": "induction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
+        "role": "component",
+    },
+    {
+        "id": "sapt0_d4i_dhf",
+        "source_columns": ("delta HF correction", "delta hf correction"),
+        "label": "δHF",
+        "category": "induction",
+        "family": "sapt",
+        "level": "SAPT0-D4(i)",
         "role": "component",
     },
 
@@ -322,81 +405,91 @@ ENERGY_DEFINITIONS = (
         "role": "total",
     },
 
-    # SAPT(DFT) raw interaction decomposition.
+    # SAPT(PBE0)-D4(i) raw interaction decomposition. run_saptdft.py's explicit method names
+    # are canonical; F-* remains accepted only as the older spelling for the same quantities.
     {
         "id": "saptdft_total",
-        "source_columns": ("F-Total",),
+        "source_columns": ("SAPT(PBE0)-D4(i) TOTAL kcalmol", "F-Total"),
         "label": "Total",
         "category": "interaction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "total",
     },
     {
         "id": "saptdft_elst",
-        "source_columns": ("F-Electrostatics",),
+        "source_columns": (
+            "SAPT(PBE0)-D4(i) ELST kcalmol",
+            "F-Electrostatics",
+        ),
         "label": "Electrostatics",
         "category": "electrostatics",
         "parent_category": "interaction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "total",
     },
     {
         "id": "saptdft_exch",
-        "source_columns": ("F-Exchange",),
+        "source_columns": ("SAPT(PBE0)-D4(i) EXCH kcalmol", "F-Exchange"),
         "label": "Exchange",
         "category": "exchange",
         "parent_category": "interaction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "total",
     },
     {
         "id": "saptdft_ind",
-        "source_columns": ("F-Induction",),
+        "source_columns": ("SAPT(PBE0)-D4(i) INDU kcalmol", "F-Induction"),
         "label": "Induction total",
         "category": "induction",
         "parent_category": "interaction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "total",
     },
     {
         "id": "saptdft_disp",
-        "source_columns": ("F-Dispersion",),
+        "source_columns": ("SAPT(PBE0)-D4(i) DISP kcalmol", "F-Dispersion"),
         "label": "Dispersion",
         "category": "dispersion",
         "parent_category": "interaction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "total",
     },
     {
         "id": "saptdft_ind20r",
-        "source_columns": ("ind20,r_dft",),
+        "source_columns": (
+            "SAPT(PBE0)-D4(i) ind20,r kcalmol",
+            "ind20,r_dft",
+        ),
         "label": "ind20,r",
         "category": "induction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "component",
     },
     {
         "id": "saptdft_exch_ind20r",
-        "source_columns": ("exch-ind20,r_dft",),
+        "source_columns": (
+            "SAPT(PBE0)-D4(i) exch-ind20,r kcalmol",
+            "exch-ind20,r_dft",
+        ),
         "label": "exch-ind20,r",
         "category": "induction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "component",
     },
     {
         "id": "saptdft_dhf",
-        "source_columns": ("delta hf correction",),
+        "source_columns": ("delta HF correction", "delta hf correction"),
         "label": "δHF",
         "category": "induction",
         "family": "sapt",
-        "level": "SAPT(DFT)",
+        "level": "SAPT(PBE0)-D4(i)",
         "role": "component",
     },
 
@@ -546,7 +639,7 @@ DELTA_MTP_OUTPUT_COLUMNS = (
 
 # Every column the app understands. A union of the sets above rather than a fourth list, so
 # it cannot drift from them. Used to report what an upload carried and what it did not.
-KNOWN_COLUMNS = REQUIRED_COLUMNS | MBIS_COLUMNS | ENERGY_COLUMNS | {
+KNOWN_COLUMNS = REQUIRED_COLUMNS | METADATA_COLUMNS | MBIS_COLUMNS | ENERGY_COLUMNS | {
     column for columns in FEATURE_REQUIREMENTS.values() for column in columns
 }
 

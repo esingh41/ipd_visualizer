@@ -390,20 +390,36 @@ def save_collection(
             for frame in trajectory["frames"]
         ]
         relative = f"{SYSTEMS_DIRNAME}/{slugs[name]}.json"
-        _write_json(
-            directory / relative,
-            {
-                "collection_id": str(collection_id),
-                "system": name,
-                "n_frames": len(frames),
-                "features": features,
-                # What every energy in the frames below *means*, stated once. Frames carry
-                # only {id: value}.
-                "energy_catalog": catalog,
-                "frames": frames,
-            },
-        )
-        systems.append({"name": name, "file": relative, "n_frames": len(frames)})
+        system_payload = {
+            "collection_id": str(collection_id),
+            "system": name,
+            "n_frames": len(frames),
+            "features": features,
+            # What every energy in the frames below *means*, stated once. Frames carry
+            # only {id: value}.
+            "energy_catalog": catalog,
+            "frames": frames,
+        }
+        system_entry = {"name": name, "file": relative, "n_frames": len(frames)}
+        for field in ("binding_motif", "source_dataset"):
+            value = trajectory.get(field)
+            if value:
+                system_payload[field] = value
+                system_entry[field] = value
+        _write_json(directory / relative, system_payload)
+        systems.append(system_entry)
+
+    # First appearance is the catalog order. This comes from serialized systems rather than a
+    # hardcoded taxonomy, so an unrelated categorized upload can define its own vocabulary.
+    motif_counts = {}
+    for system in systems:
+        motif = system.get("binding_motif")
+        if motif:
+            motif_counts[motif] = motif_counts.get(motif, 0) + 1
+    binding_motifs = [
+        {"name": name, "system_count": count}
+        for name, count in motif_counts.items()
+    ]
 
     manifest = {
         "collection_id": str(collection_id),
@@ -417,6 +433,7 @@ def save_collection(
         "missing_optional_fields": sorted(dataframe_schema.KNOWN_COLUMNS - columns),
         "features": features,
         "validation": validation,
+        "binding_motifs": binding_motifs,
         "systems": systems,
     }
 

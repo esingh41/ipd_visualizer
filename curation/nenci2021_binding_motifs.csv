@@ -1,0 +1,142 @@
+parent_system_id,binding_motif
+01_Water-Water,Single hydrogen bond
+02_Water-MeOH,Single hydrogen bond
+03_Water-MeNH2,Single hydrogen bond
+04_Water-Peptide,Single hydrogen bond
+05_MeOH-MeOH,Single hydrogen bond
+06_MeOH-MeNH2,Single hydrogen bond
+07_MeOH-Peptide,Single hydrogen bond
+08_MeOH-Water,Single hydrogen bond
+09_MeNH2-MeOH,Single hydrogen bond
+10_MeNH2-MeNH2,Single hydrogen bond
+11_MeNH2-Peptide,Single hydrogen bond
+12_MeNH2-Water,Single hydrogen bond
+13_Peptide-MeOH,Single hydrogen bond
+14_Peptide-MeNH2,Single hydrogen bond
+15_Peptide-Peptide,Single hydrogen bond
+16_Peptide-Water,Single hydrogen bond
+18_Water-Pyridine,Single hydrogen bond
+19_MeOH-Pyridine,Single hydrogen bond
+58_Pyridine-Pyridine_CH-N,Single hydrogen bond
+59_Ethyne-Water_CH-O,Single hydrogen bond
+65_Pyridine-Ethyne,Single hydrogen bond
+66_MeNH2-Pyridine,Single hydrogen bond
+067_Water-CH3SH,Single hydrogen bond
+068_CH3SH-Water,Single hydrogen bond
+071_Water-DMSO_HB,Single hydrogen bond
+077_MeF-Water,Single hydrogen bond
+080_MeCl-Water,Single hydrogen bond
+083_MeBr-Water,Single hydrogen bond
+086_BenF-Water,Single hydrogen bond
+096_DimethylSulfide-Water,Single hydrogen bond
+097_Imidazole-Water,Single hydrogen bond
+098_Pyrrolidine-Water,Single hydrogen bond
+099_Phenol-Water,Single hydrogen bond
+100_Water-Phenol,Single hydrogen bond
+101_Indole-Water,Single hydrogen bond
+17_Uracil-Uracil_BP,Double hydrogen bond
+20_AcOH-AcOH,Double hydrogen bond
+21_AcNH2-AcNH2,Double hydrogen bond
+22_AcOH-Uracil,Double hydrogen bond
+23_AcNH2-Uracil,Double hydrogen bond
+075_PO4H3-Water,Double hydrogen bond
+076_PO4H3-PO4H3,Double hydrogen bond
+087_BenCl-Water,Halogen bond
+088_BenBr-Water,Halogen bond
+073_PO4H-Water,Ion–dipole interaction
+074_PO4H2-Water,Ion–dipole interaction
+092_MeNH3-Water,Ion–dipole interaction
+093_ImidazolePlus-Water,Ion–dipole interaction
+094_CN3H6-Water,Ion–dipole interaction
+095_AcOHMinus-Water,Ion–dipole interaction
+069_CH3SH-CH3SH,Dipole–dipole interaction
+070_Water-DMSO,Dipole–dipole interaction
+072_DMSO-DMSO,Dipole–dipole interaction
+078_MeF-MeF_1,Dipole–dipole interaction
+079_MeF-MeF_2,Dipole–dipole interaction
+081_MeCl-MeCl_1,Dipole–dipole interaction
+082_MeCl-MeCl_2,Dipole–dipole interaction
+084_MeBr-MeBr_1,Dipole–dipole interaction
+085_MeBr-MeBr_2,Dipole–dipole interaction
+089_CH2F2-CH2F2,Dipole–dipole interaction
+090_CH2Cl2-CH2Cl2,Dipole–dipole interaction
+091_CH2Br2-CH2Br2,Dipole–dipole interaction
+24_Benzene-Benzene_pi-pi,π–π stacking
+25_Pyridine-Pyridine_pi-pi,π–π stacking
+26_Uracil-Uracil_pi-pi,π–π stacking
+27_Benzene-Pyridine_pi-pi,π–π stacking
+28_Benzene-Uracil_pi-pi,π–π stacking
+29_Pyridine-Uracil_pi-pi,π–π stacking
+30_Benzene-Ethene,π–π stacking
+31_Uracil-Ethene,π–π stacking
+32_Uracil-Ethyne,π–π stacking
+33_Pyridine-Ethene,π–π stacking
+47_Benzene-Benzene_TS,X–H···π / CH–π interaction
+48_Pyridine-Pyridine_TS,X–H···π / CH–π interaction
+49_Benzene-Pyridine_TS,X–H···π / CH–π interaction
+50_Benzene-Ethyne_CH-pi,X–H···π / CH–π interaction
+51_Ethyne-Ethyne_TS,X–H···π / CH–π interaction
+52_Benzene-AcOH_OH-pi,X–H···π / CH–π interaction
+53_Benzene-AcNH2_NH-pi,X–H···π / CH–π interaction
+54_Benzene-Water_OH-pi,X–H···π / CH–π interaction
+55_Benzene-MeOH_OH-pi,X–H···π / CH–π interaction
+56_Benzene-MeNH2_NH-pi,X–H···π / CH–π interaction
+57_Benzene-Peptide_NH-pi,X–H···π / CH–π interaction
+60_Ethyne-AcOH_OH-pi,X–H···π / CH–π interaction
+63_Benzene-AcOH,X–H···π / CH–π interaction
+34_Pentane-Pentane,Dispersion-dominated contact
+35_Neopentane-Pentane,Dispersion-dominated contact
+36_Neopentane-Neopentane,Dispersion-dominated contact
+37_Cyclopentane-Neopentane,Dispersion-dominated contact
+38_Cyclopentane-Cyclopentane,Dispersion-dominated contact
+39_Benzene-Cyclopentane,Dispersion-dominated contact
+40_Benzene-Neopentane,Dispersion-dominated contact
+41_Uracil-Pentane,Dispersion-dominated contact
+42_Uracil-Cyclopentane,Dispersion-dominated contact
+43_Uracil-Neopentane,Dispersion-dominated contact
+44_Ethene-Pentane,Dispersion-dominated contact
+45_Ethyne-Pentane,Dispersion-dominated contact
+46_Peptide-Pentane,Dispersion-dominated contact
+102_Li-adenine6,Cation–π interaction
+103_Na-adenine6,Cation–π interaction
+106_Li-adenine5,Cation–π interaction
+107_Na-adenine5,Cation–π interaction
+110_Li-cytosine,Cation–π interaction
+111_Na-cytosine,Cation–π interaction
+114_Li-guanine6,Cation–π interaction
+115_Na-guanine6,Cation–π interaction
+118_Li-guanine5,Cation–π interaction
+119_Na-guanine5,Cation–π interaction
+122_Li-thymine,Cation–π interaction
+123_Na-thymine,Cation–π interaction
+126_Li-uracil,Cation–π interaction
+127_Na-uracil,Cation–π interaction
+130_Li-benzene,Cation–π interaction
+131_Na-benzene,Cation–π interaction
+134_Li-trifluorotriazine,Cation–π interaction
+135_Na-trifluorotriazine,Cation–π interaction
+138_Li-pyridine,Cation–π interaction
+139_Na-pyridine,Cation–π interaction
+104_F-adenine6,Anion–π interaction
+105_Cl-adenine6,Anion–π interaction
+108_F-adenine5,Anion–π interaction
+109_Cl-adenine5,Anion–π interaction
+112_F-cytosine,Anion–π interaction
+113_Cl-cytosine,Anion–π interaction
+116_F-guanine6,Anion–π interaction
+117_Cl-guanine6,Anion–π interaction
+120_F-guanine5,Anion–π interaction
+121_Cl-guanine5,Anion–π interaction
+124_F-thymine,Anion–π interaction
+125_Cl-thymine,Anion–π interaction
+128_F-uracil,Anion–π interaction
+129_Cl-uracil,Anion–π interaction
+132_F-benzene,Anion–π interaction
+133_Cl-benzene,Anion–π interaction
+136_F-trifluorotriazine,Anion–π interaction
+137_Cl-trifluorotriazine,Anion–π interaction
+140_F-pyridine,Anion–π interaction
+141_Cl-pyridine,Anion–π interaction
+61_Pentane-AcOH,Mixed/competing effects
+62_Pentane-AcNH2,Mixed/competing effects
+64_Peptide-Ethene,Mixed/competing effects

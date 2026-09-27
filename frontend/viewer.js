@@ -13,6 +13,8 @@ import * as plots from "/plots.js";
 
 const SPHERE_SCALE = 0.15;
 const STICK_RADIUS = 0.55 * SPHERE_SCALE;
+// 3Dmol's default sodium colour is too dark for the black atomic charge labels.
+const SODIUM_COLOR = 0x7dd3fc;
 const FRAME_INTERVAL_MS = 500;
 
 // Arrow geometry ported from _arrow_cgo (pymol_dipole.py) and verified to reproduce PyMOL to
@@ -31,15 +33,28 @@ const DIPOLE_COLORS = {
   delta: 0x9467bd,
 };
 
+// Fragment identity is deliberately a translucent halo rather than a replacement atom colour:
+// element colours still carry chemical meaning, while cyan/magenta remain easy to distinguish
+// from one another and from the permanent-dipole palette.
+const FRAGMENT_COLORS = {
+  A: 0x00a6d6,
+  B: 0xd81b60,
+};
+const FRAGMENT_HALO_RADIUS = 0.48;
+const FRAGMENT_HALO_OPACITY = 0.28;
+
 let viewer = null;
 let currentTrajectory = null;
 let currentFrameIndex = 0;
 let playbackTimer = null;
+let allSystems = [];
 
 // Which multipole table is on screen, and which atoms it lists. The selected frame stays the
 // primary state -- these only decide how that frame is presented.
 let currentMultipoleView = "charges";
 let currentAtomFilter = "all";
+// The IPD comparison has its own filter: changing it must not alter the table on Trajectory.
+let currentDipoleComparisonAtomFilter = "all";
 
 // Viewer overlays: what is drawn *on* the molecule, as opposed to tabulated beneath it.
 // Dipoles are three independent layers because arrows of different colours coexist readably;
@@ -48,8 +63,14 @@ let showMonomerDipoles = false;
 let showDimerDipoles = false;
 let showDeltaDipoles = false;
 let chargeLabelMode = "none";
+// Both fragments are identified on first load; these choices then remain user state while the
+// selected frame, system, or collection changes.
+let showFragmentA = true;
+let showFragmentB = true;
 
-// Handles for what each viewer drew, so permanent and induced layers clear only their own work.
+// Handles for what each viewer drew, so permanent, fragment, and induced layers clear only
+// their own work.
+let fragmentShapes = [];
 let multipoleShapes = [];
 let chargeLabels = [];
 let ipdMultipoleShapes = [];
@@ -63,6 +84,16 @@ let baseArrowScale = 1.0;
 // IPD has its own tab and viewer, but shares the physical frame with Trajectory. Its second
 // axis is the SCF history for one frame and damping mode.
 let ipdViewer = null;
+const trajectoryMeasurement = {
+  picks: [],
+  shapes: [],
+  readoutId: "viewer-measurement",
+};
+const ipdMeasurement = {
+  picks: [],
+  shapes: [],
+  readoutId: "ipd-viewer-measurement",
+};
 let ipdShowMonomerDipoles = false;
 let ipdShowDimerDipoles = false;
 let ipdShowDeltaDipoles = false;
@@ -149,14 +180,126 @@ function isLaidOut(container) {
   );
 }
 
+function resizeViewerIfVisible(target, containerId) {
+  const container = el(containerId);
+  if (!target || !isLaidOut(container)) return;
+  // 3Dmol.resize updates its WebGL drawing buffer to the CSS box and preserves the camera.
+  // Do not call zoomTo here: resizing a browser window must not discard the user's view.
+  target.resize();
+}
+
+function resizeVisibleViewers() {
+  resizeViewerIfVisible(viewer, "viewer");
+  resizeViewerIfVisible(ipdViewer, "ipd-viewer");
+}
+
+function debounce(handler, delay) {
+  let timer = null;
+  return () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(handler, delay);
+  };
+}
+
+const resizeVisibleViewersDebounced = debounce(resizeVisibleViewers, 120);
+
+const MEASUREMENT_INSTRUCTION = "Click two atoms to measure their distance.";
+const MEASUREMENT_COLOR = 0xd4a017;
+
+function measurementReadout(state, text = MEASUREMENT_INSTRUCTION, complete = false) {
+  const node = el(state.readoutId);
+  if (!node) return;
+  node.textContent = text;
+  node.dataset.complete = String(Boolean(complete));
+}
+
+function clearMeasurement(target, state, { render = true } = {}) {
+  if (target) {
+    state.shapes.forEach((shape) => target.removeShape(shape));
+  }
+  state.picks = [];
+  state.shapes = [];
+  measurementReadout(state);
+  if (target && render) target.render();
+}
+
+function point(coords) {
+  return { x: coords[0], y: coords[1], z: coords[2] };
+}
+
+function atomMeasurementLabel(frame, index) {
+  return `${frame.symbols[index]}${index + 1}`;
+}
+
+function highlightMeasuredAtom(target, frame, state, index) {
+  state.shapes.push(
+    target.addSphere({
+      center: point(frame.coords[index]),
+      radius: 0.28,
+      color: MEASUREMENT_COLOR,
+      opacity: 0.45,
+    })
+  );
+}
+
+function pickMeasurementAtom(target, frame, state, index) {
+  if (!Number.isInteger(index) || !frame?.coords?.[index]) return;
+  // After a completed pair, the next atom starts a fresh measurement. With one pending atom,
+  // a click completes the pair (including a deliberate same-atom zero-distance measurement).
+  if (state.picks.length !== 1) clearMeasurement(target, state, { render: false });
+  state.picks.push(index);
+  highlightMeasuredAtom(target, frame, state, index);
+
+  if (state.picks.length === 1) {
+    measurementReadout(
+      state,
+      `${atomMeasurementLabel(frame, index)} selected; click a second atom.`
+    );
+  } else {
+    const [first, second] = state.picks;
+    const a = frame.coords[first];
+    const b = frame.coords[second];
+    const distance = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const text = `${atomMeasurementLabel(frame, first)}–${atomMeasurementLabel(
+      frame,
+      second
+    )}: ${distance.toFixed(3)} Å`;
+    state.shapes.push(
+      target.addLine({
+        start: point(a),
+        end: point(b),
+        color: MEASUREMENT_COLOR,
+        linewidth: 2,
+        dashed: true,
+      })
+    );
+    // Keep the molecular view unobstructed; the accessible readout below it carries the
+    // complete atom-pair label and distance.
+    measurementReadout(state, text, true);
+  }
+  target.render();
+}
+
+function makeAtomsMeasurable(target, model, frame, state) {
+  const atoms = model.selectedAtoms({});
+  atoms.forEach((atom, index) => {
+    atom.__measurementIndex = index;
+  });
+  model.setClickable({}, true, (atom) => {
+    pickMeasurementAtom(target, frame, state, atom.__measurementIndex);
+  });
+}
+
 // One geometry renderer, two named entry points. renderFrame and renderIpdFrame stay distinct
 // -- they are the two halves of the design rule, and each one's caller means something
-// different by it -- but the body lives once, because two copies of the bond-stripping and
-// styling would eventually disagree and the disagreement would be a wrong picture.
-function drawGeometry(target, frame, { resetCamera }) {
+// different by it -- but the body lives once, because two copies of the bond-stripping,
+// styling and measurement behavior would eventually disagree.
+function drawGeometry(target, frame, { resetCamera, measurementState }) {
   if (!target || !frame?.xyz) {
+    clearMeasurement(target, measurementState, { render: false });
     return;
   }
+  clearMeasurement(target, measurementState, { render: false });
   target.removeAllModels();
   const model = target.addModel(frame.xyz, "xyz");
   stripIntermonomerBonds(model, frame.n_atoms_A, frame.n_atoms);
@@ -164,6 +307,15 @@ function drawGeometry(target, frame, { resetCamera }) {
     {},
     { sphere: { scale: SPHERE_SCALE }, stick: { radius: STICK_RADIUS } }
   );
+  // Apply the same lighter sodium colour in both viewers so black Δq labels remain legible.
+  target.setStyle(
+    { elem: "Na" },
+    {
+      sphere: { scale: SPHERE_SCALE, color: SODIUM_COLOR },
+      stick: { radius: STICK_RADIUS, color: SODIUM_COLOR },
+    }
+  );
+  makeAtomsMeasurable(target, model, frame, measurementState);
   // Only on the first frame of a trajectory. Zooming on every step throws the camera away
   // mid-scrub, which is disorienting and hides what actually changed.
   if (resetCamera) {
@@ -172,9 +324,67 @@ function drawGeometry(target, frame, { resetCamera }) {
   target.render();
 }
 
-// The main viewer: geometry and MBIS analysis.
+function clearFragmentHighlights() {
+  if (viewer) {
+    fragmentShapes.forEach((shape) => viewer.removeShape(shape));
+  }
+  fragmentShapes = [];
+}
+
+function validFragmentGeometry(frame) {
+  const nAtoms = frame?.n_atoms;
+  const nAtomsA = frame?.n_atoms_A;
+  return (
+    Number.isInteger(nAtoms) &&
+    nAtoms > 0 &&
+    Number.isInteger(nAtomsA) &&
+    nAtomsA > 0 &&
+    nAtomsA < nAtoms &&
+    Array.isArray(frame.coords) &&
+    frame.coords.length === nAtoms &&
+    frame.coords.every(
+      (coords) =>
+        Array.isArray(coords) &&
+        coords.length === 3 &&
+        coords.every((value) => typeof value === "number" && Number.isFinite(value))
+    )
+  );
+}
+
+// Halos are viewer shapes rather than model styles. That keeps the element-coloured molecular
+// model untouched and gives this layer an independent lifecycle from permanent multipoles and
+// click-to-measure shapes.
+function renderFragmentHighlights(frame, { render = true } = {}) {
+  if (!viewer) return;
+  clearFragmentHighlights();
+
+  if (validFragmentGeometry(frame)) {
+    frame.coords.forEach((coords, index) => {
+      const fragment = index < frame.n_atoms_A ? "A" : "B";
+      const visible = fragment === "A" ? showFragmentA : showFragmentB;
+      if (!visible) return;
+      fragmentShapes.push(
+        viewer.addSphere({
+          center: point(coords),
+          radius: FRAGMENT_HALO_RADIUS,
+          color: FRAGMENT_COLORS[fragment],
+          opacity: FRAGMENT_HALO_OPACITY,
+        })
+      );
+    });
+  }
+
+  // Invalid/legacy data still needs one render after clearing stale shapes from the last frame.
+  if (render) viewer.render();
+}
+
+// The main viewer: geometry, fragment identity, and MBIS analysis.
 function renderFrame(frame, { resetCamera }) {
-  drawGeometry(viewer, frame, { resetCamera });
+  // Remove old-coordinate halos before drawGeometry renders the replacement model, then add
+  // the selected fragments only after that model has loaded.
+  clearFragmentHighlights();
+  drawGeometry(viewer, frame, { resetCamera, measurementState: trajectoryMeasurement });
+  renderFragmentHighlights(frame);
 }
 
 // --- frames -----------------------------------------------------------------
@@ -185,6 +395,9 @@ function frameLabel(frame) {
   // both null for frames where they could not be derived, so neither can be formatted here
   // without a guard.
   const parts = [`Frame ${frame.frame_index + 1} / ${currentTrajectory.frames.length}`];
+  if (Number.isInteger(frame.n_atoms) && frame.n_atoms > 0) {
+    parts.push(`${frame.n_atoms} atoms`);
+  }
   if (frame.separation_label) {
     parts.push(frame.separation_label);
   }
@@ -205,6 +418,9 @@ function showFrame(index, { resetCamera = false } = {}) {
   ipdHistoryRequestToken += 1;
   currentFrameIndex = index;
   currentIpdIteration = 0;
+  // The IPD canvas may be hidden and therefore not redrawn below, but its old measurement
+  // must still clear as soon as the shared physical frame changes.
+  clearMeasurement(ipdViewer, ipdMeasurement, { render: false });
 
   renderFrame(frame, { resetCamera });
   const label = frameLabel(frame);
@@ -215,6 +431,8 @@ function showFrame(index, { resetCamera = false } = {}) {
   updateOverlayControls(frame);
   renderMultipoleOverlays(frame);
   renderIpdSection(frame);
+  // A revisited frame/mode can render synchronously from its frame-local history cache.
+  renderAtomicDipoleComparison(frame, currentIpdHistory());
 
   if (ipdViewer && isIpdTabActive()) {
     renderIpdFrame(frame, { resetCamera });
@@ -237,6 +455,8 @@ function setTrajectory(trajectory) {
   pausePlayback();
   stopIpdPlayback();
   ipdHistoryRequestToken += 1;
+  clearMeasurement(viewer, trajectoryMeasurement, { render: false });
+  clearMeasurement(ipdViewer, ipdMeasurement, { render: false });
 
   currentTrajectory = trajectory;
   currentFrameIndex = 0;
@@ -441,9 +661,41 @@ function showMultipoleUnavailable(message) {
   node.hidden = false;
 }
 
+function completeChargeTotal(values, indices) {
+  if (!Array.isArray(values) || indices.length === 0) {
+    return null;
+  }
+  let total = 0;
+  for (const index of indices) {
+    const value = values[index];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return null;
+    }
+    total += value;
+  }
+  return total;
+}
+
+function monomerChargeTotals(frame, data, monomer) {
+  const indices = [];
+  for (let i = 0; i < frame.n_atoms; i += 1) {
+    if (atomMonomer(frame, i) === monomer) {
+      indices.push(i);
+    }
+  }
+
+  const isolated = completeChargeTotal(data.monomer, indices);
+  const dimer = completeChargeTotal(data.dimer, indices);
+  return {
+    isolated,
+    dimer,
+    delta: isolated === null || dimer === null ? null : dimer - isolated,
+  };
+}
+
 // Charges and volume ratios: one number per atom, so monomer, dimer and their difference are
 // each a single column.
-function renderScalarTable(frame, data, heading) {
+function renderScalarTable(frame, data, heading, { summarizeCharges = false } = {}) {
   appendRow(el("multipole-table-head"), "th", [
     "Atom",
     "Monomer",
@@ -467,6 +719,23 @@ function renderScalarTable(frame, data, heading) {
       { text: num(dimer), className: "numeric" },
       { text: bothPresent ? num(dimer - monomer, true) : MISSING, className: "numeric delta" },
     ]);
+  }
+
+  if (summarizeCharges) {
+    const foot = el("multipole-table-foot");
+    for (const monomer of ["A", "B"]) {
+      if (currentAtomFilter !== "all" && currentAtomFilter !== monomer) {
+        continue;
+      }
+      const totals = monomerChargeTotals(frame, data, monomer);
+      appendRow(foot, "td", [
+        { text: `Monomer ${monomer} total`, className: "summary-label" },
+        monomer,
+        { text: num(totals.isolated), className: "numeric group-start" },
+        { text: num(totals.dimer), className: "numeric" },
+        { text: num(totals.delta, true), className: "numeric delta" },
+      ]);
+    }
   }
 }
 
@@ -525,8 +794,9 @@ function renderDipoleTable(frame, data) {
 
 // Decides which table to show. Never touches the viewer or the selected frame.
 function renderMultipoleSection(frame) {
-  el("multipole-table-head").innerHTML = "";
-  el("multipole-table-body").innerHTML = "";
+  el("multipole-table-head").replaceChildren();
+  el("multipole-table-body").replaceChildren();
+  el("multipole-table-foot").replaceChildren();
   el("multipole-message").hidden = true;
 
   if (!frame.n_atoms) {
@@ -549,7 +819,12 @@ function renderMultipoleSection(frame) {
   if (currentMultipoleView === "dipoles") {
     renderDipoleTable(frame, data);
   } else {
-    renderScalarTable(frame, data, currentMultipoleView === "charges" ? "q" : "ratio");
+    renderScalarTable(
+      frame,
+      data,
+      currentMultipoleView === "charges" ? "q" : "ratio",
+      { summarizeCharges: currentMultipoleView === "charges" }
+    );
   }
 }
 
@@ -592,6 +867,112 @@ function deltaDipoles(frame) {
     return null;
   }
   return monomer.map((mu, i) => [dimer[i][0] - mu[0], dimer[i][1] - mu[1], dimer[i][2] - mu[2]]);
+}
+
+// --- final atomic dipole comparison ----------------------------------------
+
+function clearAtomicDipoleComparison() {
+  el("atomic-dipole-comparison-table-head").replaceChildren();
+  el("atomic-dipole-comparison-table-body").replaceChildren();
+  el("atomic-dipole-comparison-section").hidden = true;
+}
+
+function alignedDipoleVectors(vectors, nAtoms) {
+  return (
+    Array.isArray(vectors) &&
+    vectors.length === nAtoms &&
+    vectors.every(
+      (vector) =>
+        Array.isArray(vector) &&
+        vector.length === 3 &&
+        vector.every((value) => typeof value === "number" && Number.isFinite(value))
+    )
+  );
+}
+
+function dipoleComparisonAtomVisible(frame, index) {
+  return (
+    currentDipoleComparisonAtomFilter === "all" ||
+    atomMonomer(frame, index) === currentDipoleComparisonAtomFilter
+  );
+}
+
+// This table always means the converged solution. It intentionally ignores
+// currentIpdIteration, which is only the iteration drawn in the 3D viewer.
+function renderAtomicDipoleComparison(frame, history) {
+  clearAtomicDipoleComparison();
+
+  const selectedMode = ipdMode(frame, currentIpdMode);
+  if (
+    !frame ||
+    frame !== selectedFrame() ||
+    failedIpdFrames(currentIpdMode).has(Number(frame.frame_index)) ||
+    !Number.isInteger(frame.n_atoms) ||
+    frame.n_atoms < 1 ||
+    !Array.isArray(frame.symbols) ||
+    frame.symbols.length !== frame.n_atoms ||
+    selectedMode?.converged !== true ||
+    history?.converged !== true ||
+    history.mode !== currentIpdMode ||
+    history.n_atoms !== frame.n_atoms ||
+    history.n_atoms_A !== frame.n_atoms_A ||
+    !Array.isArray(history.mu_history) ||
+    history.mu_history.length < 1 ||
+    history.iteration_count !== history.mu_history.length
+  ) {
+    return;
+  }
+
+  let mbisDelta;
+  try {
+    // The same existing MBIS dimer-minus-monomer calculation used by permanent overlays.
+    mbisDelta = deltaDipoles(frame);
+  } catch (_error) {
+    return;
+  }
+  const finalIpd = history.mu_history[history.mu_history.length - 1];
+  if (
+    !alignedDipoleVectors(mbisDelta, frame.n_atoms) ||
+    !alignedDipoleVectors(finalIpd, frame.n_atoms)
+  ) {
+    return;
+  }
+
+  const head = el("atomic-dipole-comparison-table-head");
+  appendRow(head, "th", [
+    { text: "Atom", rowSpan: 2 },
+    { text: "Monomer", rowSpan: 2 },
+    { text: "MBIS Δμ = μ dimer − μ monomer (a.u.)", colSpan: 4, className: "group" },
+    { text: "Final IPD induced dipole (a.u.)", colSpan: 4, className: "group" },
+  ]);
+  appendRow(
+    head,
+    "th",
+    ["x", "y", "z", "|Δμ|", "x", "y", "z", "|μind|"].map((text, index) => ({
+      text,
+      className: index % 4 === 0 ? "numeric group-start" : "numeric",
+    }))
+  );
+
+  const body = el("atomic-dipole-comparison-table-body");
+  for (let i = 0; i < frame.n_atoms; i += 1) {
+    if (!dipoleComparisonAtomVisible(frame, i)) {
+      continue;
+    }
+    appendRow(body, "td", [
+      atomLabel(frame, i),
+      atomMonomer(frame, i),
+      ...vectorCells(mbisDelta[i], true),
+      ...vectorCells(finalIpd[i], true),
+    ]);
+  }
+  el("atomic-dipole-comparison-section").hidden = false;
+}
+
+function setDipoleComparisonAtomFilter(filter) {
+  currentDipoleComparisonAtomFilter = filter;
+  setActiveButton(el("dipole-comparison-atom-filters"), "filter", filter);
+  renderAtomicDipoleComparison(selectedFrame(), currentIpdHistory());
 }
 
 function dipoleVectors(frame, layer) {
@@ -847,6 +1228,16 @@ function updateOverlayControls(frame) {
 
 // Toggling an overlay redraws overlays only. Going through showFrame would destroy and rebuild
 // the molecule, throwing the camera away for a change that does not touch the geometry.
+function setFragmentAVisible(visible) {
+  showFragmentA = visible;
+  renderFragmentHighlights(selectedFrame());
+}
+
+function setFragmentBVisible(visible) {
+  showFragmentB = visible;
+  renderFragmentHighlights(selectedFrame());
+}
+
 function setMonomerDipolesVisible(visible) {
   showMonomerDipoles = visible;
   renderMultipoleOverlays(selectedFrame());
@@ -955,7 +1346,7 @@ function renderIpdFrame(frame, { resetCamera = false } = {}) {
   // old geometry goes. Keeping separate handles prevents either family erasing the other.
   clearIpdDipoles();
   clearIpdMultipoleOverlays();
-  drawGeometry(ipdViewer, frame, { resetCamera });
+  drawGeometry(ipdViewer, frame, { resetCamera, measurementState: ipdMeasurement });
   renderIpdMultipoleOverlays(frame);
 }
 
@@ -995,6 +1386,7 @@ function renderIpdSection(frame) {
   const modes = ipdModes(frame);
 
   if (!frame?.ipd || modes.length === 0) {
+    clearAtomicDipoleComparison();
     message.textContent = "Select a system to inspect induced point dipoles.";
     message.hidden = false;
     controls.hidden = true;
@@ -1008,6 +1400,10 @@ function renderIpdSection(frame) {
 
   const selected = ipdMode(frame, currentIpdMode);
   const stored = Boolean(selected?.stored);
+  if (selected?.converged !== true) {
+    // A finite last iteration from a capped SCF is not a converged solution to compare.
+    clearAtomicDipoleComparison();
+  }
   const anyComputable = currentTrajectory?.frames.some((entry) => entry.ipd?.computable);
   const compute = el("ipd-compute");
   const computeAll = el("ipd-compute-all");
@@ -1130,6 +1526,8 @@ function ipdIterationKey(frame, mode) {
 async function selectIpdMode(mode) {
   stopIpdPlayback();
   clearIpdDipoles();
+  // Never leave values from the previous frame/mode visible during an asynchronous read.
+  clearAtomicDipoleComparison();
   currentIpdMode = mode;
   currentIpdIteration = 0;
   const requestToken = ++ipdHistoryRequestToken;
@@ -1152,6 +1550,7 @@ async function selectIpdMode(mode) {
     if (requestToken !== ipdHistoryRequestToken) {
       return;
     }
+    clearAtomicDipoleComparison();
     throw error;
   }
 
@@ -1165,6 +1564,7 @@ async function selectIpdMode(mode) {
     return;
   }
 
+  renderAtomicDipoleComparison(frame, history);
   renderIpdTimeline(history.mu_history.length);
   const remembered = ipdIterationMemory.get(ipdIterationKey(frame, mode));
   const initial = Number.isInteger(remembered)
@@ -1373,6 +1773,7 @@ function setIpdComputeState(inFlight, { allFrames = false } = {}) {
   if (inFlight) {
     stopIpdPlayback();
     ipdHistoryRequestToken += 1;
+    clearAtomicDipoleComparison();
   }
   renderIpdSection(selectedFrame());
   if (inFlight) {
@@ -1426,6 +1827,7 @@ async function computeIpd() {
 
   refreshTrajectoryConsumers(mode);
   renderIpdSection(frame);
+  renderAtomicDipoleComparison(frame, frame.ipd.history?.[mode]);
   if (isIpdTabActive()) {
     await selectIpdMode(mode);
   }
@@ -1489,6 +1891,7 @@ async function computeIpdForTrajectory() {
 
   refreshTrajectoryConsumers(mode);
   renderIpdSection(selectedFrame());
+  renderAtomicDipoleComparison(selectedFrame(), currentIpdHistory());
   if (isIpdTabActive()) {
     await selectIpdMode(mode);
   }
@@ -1681,20 +2084,70 @@ async function loadTrajectory() {
   setStatus(`${trajectory.system} — ${trajectory.n_frames} frames`);
 }
 
+function systemSelectOptions(systems) {
+  return systems.map((system) => ({
+    label: `${system.system_id} (${system.frame_count} frames)`,
+    value: system.slug,
+  }));
+}
+
+function eligibleSystems() {
+  const motif = el("binding-motif-select").value;
+  return motif
+    ? allSystems.filter((system) => system.binding_motif === motif)
+    : allSystems;
+}
+
+async function applyMotifFilter() {
+  const systemSelect = el("system-select");
+  const previousSlug = systemSelect.value;
+  const eligible = eligibleSystems();
+  fillSelect(systemSelect, systemSelectOptions(eligible), { placeholder: "No systems" });
+  if (eligible.some((system) => system.slug === previousSlug)) {
+    systemSelect.value = previousSlug;
+  }
+  // Filtering does not reload an unchanged system. If it became ineligible, the select's
+  // first option is now current and must replace the displayed trajectory.
+  if (systemSelect.value && systemSelect.value !== previousSlug) {
+    await loadTrajectory();
+  }
+}
+
 async function loadSystems() {
   const uploadId = el("collection-select").value;
   if (!uploadId) {
     return;
   }
   const listing = await callJson(`/api/uploads/${encodeURIComponent(uploadId)}/systems`);
-  fillSelect(
-    el("system-select"),
-    listing.systems.map((system) => ({
-      label: `${system.system_id} (${system.frame_count} frames)`,
-      value: system.slug,
-    })),
-    { placeholder: "No systems" }
-  );
+  allSystems = listing.systems;
+
+  const motifField = el("binding-motif-field");
+  const motifSelect = el("binding-motif-select");
+  const motifs = listing.binding_motifs ?? [];
+  motifField.hidden = motifs.length === 0;
+  if (motifs.length) {
+    fillSelect(
+      motifSelect,
+      [
+        { label: "All binding motifs", value: "" },
+        ...motifs.map((motif) => ({
+          label: `${motif.name} (${motif.system_count} systems)`,
+          value: motif.name,
+        })),
+      ],
+      { placeholder: "All binding motifs" }
+    );
+    motifSelect.value = "";
+  } else {
+    motifSelect.replaceChildren();
+    motifSelect.disabled = true;
+  }
+
+  // A collection change starts at All and at its first system, matching the pre-filter
+  // workflow. Selection preservation applies while filtering within this listing.
+  fillSelect(el("system-select"), systemSelectOptions(allSystems), {
+    placeholder: "No systems",
+  });
   await loadTrajectory();
 }
 
@@ -1733,6 +2186,12 @@ async function uploadFile(file) {
 
 // --- tabs -------------------------------------------------------------------
 
+function activateTrajectoryTab() {
+  // A resize that happened while this tab was hidden was deliberately skipped. Measure only
+  // after selectTab has exposed the panel, preserving the existing camera.
+  requestAnimationFrame(() => resizeViewerIfVisible(viewer, "viewer"));
+}
+
 async function activateIpdTab() {
   // If Trajectory was playing when the user changed tabs, do not turn it into an implicit IPD
   // separation animation. Separation changes in this tab are manual.
@@ -1742,6 +2201,7 @@ async function activateIpdTab() {
   initializeIpdViewer();
   if (ipdViewer && frame) {
     renderIpdFrame(frame);
+    requestAnimationFrame(() => resizeViewerIfVisible(ipdViewer, "ipd-viewer"));
   }
   if (frame && ipdMode(frame, currentIpdMode)?.stored) {
     await selectIpdMode(currentIpdMode);
@@ -1756,7 +2216,7 @@ function deactivateIpdTab() {
 // aria-selected is the state; the panel's `hidden` and the CSS both follow it, matching the
 // existing Plots-tab lifecycle rather than inventing a second navigation mechanism.
 const TABS = [
-  { tab: "tab-trajectory", panel: "panel-trajectory" },
+  { tab: "tab-trajectory", panel: "panel-trajectory", onShow: activateTrajectoryTab },
   {
     tab: "tab-ipd",
     panel: "panel-ipd",
@@ -1816,6 +2276,7 @@ function guard(handler) {
 function init() {
   viewer = window.$3Dmol.createViewer(el("viewer"), { backgroundColor: "white" });
   initTabs();
+  window.addEventListener("resize", resizeVisibleViewersDebounced);
 
   el("file-input").addEventListener(
     "change",
@@ -1829,6 +2290,7 @@ function init() {
   );
 
   el("collection-select").addEventListener("change", guard(loadSystems));
+  el("binding-motif-select").addEventListener("change", guard(applyMotifFilter));
   el("system-select").addEventListener("change", guard(loadTrajectory));
   el("play-button").addEventListener("click", togglePlayback);
   // Both physical-frame timelines wire their own buttons to the shared selectFrame path.
@@ -1845,7 +2307,19 @@ function init() {
       setAtomFilter(filter);
     }
   });
+  el("dipole-comparison-atom-filters").addEventListener("click", (event) => {
+    const { filter } = event.target.dataset;
+    if (filter) {
+      setDipoleComparisonAtomFilter(filter);
+    }
+  });
 
+  el("show-fragment-a").addEventListener("change", (event) => {
+    setFragmentAVisible(event.target.checked);
+  });
+  el("show-fragment-b").addEventListener("change", (event) => {
+    setFragmentBVisible(event.target.checked);
+  });
   el("show-monomer-dipoles").addEventListener("change", (event) => {
     setMonomerDipolesVisible(event.target.checked);
   });

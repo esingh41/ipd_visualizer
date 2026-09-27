@@ -31,6 +31,11 @@
           <select id="collection-select" disabled></select>
         </label>
 
+        <label id="binding-motif-field" class="field" hidden>
+          <span>Binding motif</span>
+          <select id="binding-motif-select" disabled></select>
+        </label>
+
         <label class="field">
           <span>System</span>
           <select id="system-select" disabled></select>
@@ -62,6 +67,11 @@
                 <li>
                   <code>system_id</code> is optional. It groups related rows into a trajectory;
                   without it, each row is shown as a separate single-frame system.
+                </li>
+                <li>
+                  <code>binding_motif</code> is optional. A trajectory is categorized only
+                  when every frame contains the same nonblank value. Collections without
+                  categorized trajectories keep the ordinary flat System selector.
                 </li>
               </ul>
             </section>
@@ -223,6 +233,9 @@
              stacked ones. -->
         <div class="viewer-main">
           <div id="viewer" class="viewer"></div>
+          <p id="viewer-measurement" class="measurement-readout" aria-live="polite">
+            Click two atoms to measure their distance.
+          </p>
 
           <!-- One dot per physical geometry. Each has exactly one meaning: select this frame. -->
           <div id="frame-timeline" class="timeline" role="group" aria-label="Trajectory"></div>
@@ -240,6 +253,20 @@
              viewer reuses the same layout for its independent permanent multipoles. -->
         <div class="overlays overlays-side">
           <span class="overlays-title">Viewer overlays</span>
+
+          <fieldset class="overlay-group">
+            <legend>Fragment halos</legend>
+            <label class="swatch-label">
+              <input id="show-fragment-a" type="checkbox" checked />
+              <span class="swatch fragment-swatch swatch-fragment-a" aria-hidden="true"></span>
+              Monomer A
+            </label>
+            <label class="swatch-label">
+              <input id="show-fragment-b" type="checkbox" checked />
+              <span class="swatch fragment-swatch swatch-fragment-b" aria-hidden="true"></span>
+              Monomer B
+            </label>
+          </fieldset>
 
           <fieldset class="overlay-group">
             <legend>Dipoles</legend>
@@ -304,9 +331,10 @@
         <div id="multipole-content">
           <p id="multipole-message" class="multipole-message" hidden></p>
           <div class="table-scroll">
-            <table id="multipole-table">
+            <table id="multipole-table" class="multipole-table" aria-label="Atomic multipoles">
               <thead id="multipole-table-head"></thead>
               <tbody id="multipole-table-body"></tbody>
+              <tfoot id="multipole-table-foot"></tfoot>
             </table>
           </div>
         </div>
@@ -368,6 +396,9 @@
             <section class="viewer-panel ipd-viewer-panel">
               <div class="viewer-main">
                 <div id="ipd-viewer" class="viewer"></div>
+                <p id="ipd-viewer-measurement" class="measurement-readout" aria-live="polite">
+                  Click two atoms to measure their distance.
+                </p>
               </div>
 
               <div class="overlays overlays-side">
@@ -449,6 +480,38 @@
             </div>
           </div>
         </section>
+
+        <details
+          id="atomic-dipole-comparison-section"
+          class="multipoles"
+          hidden
+        >
+          <summary>Atomic Dipole Comparison</summary>
+
+          <div class="multipole-controls">
+            <div
+              class="button-group"
+              id="dipole-comparison-atom-filters"
+              role="group"
+              aria-label="Atomic dipole comparison atoms"
+            >
+              <button type="button" data-filter="all" class="active">All</button>
+              <button type="button" data-filter="A">A</button>
+              <button type="button" data-filter="B">B</button>
+            </div>
+          </div>
+
+          <div class="table-scroll">
+            <table
+              id="atomic-dipole-comparison-table"
+              class="multipole-table"
+              aria-label="Atomic dipole comparison"
+            >
+              <thead id="atomic-dipole-comparison-table-head"></thead>
+              <tbody id="atomic-dipole-comparison-table-body"></tbody>
+            </table>
+          </div>
+        </details>
       </section>
 
       <section

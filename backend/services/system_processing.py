@@ -229,6 +229,33 @@ def _system_id_of(row, position):
     return str(value).strip()
 
 
+def _optional_metadata(row, column):
+    """One trimmed scalar metadata value, or None when absent, blank, or nonscalar."""
+    value = row.get(column)
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(missing, (bool, np.bool_)):
+        if missing:
+            return None
+    else:
+        # Arrays/lists are not one trajectory label and must not be stringified into one.
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _unanimous_metadata(frames, column):
+    """A value only when every frame has the same nonblank optional metadata."""
+    values = [_optional_metadata(frame["_row"], column) for frame in frames]
+    if not values or any(value is None for value in values):
+        return None
+    return values[0] if len(set(values)) == 1 else None
+
+
 def group_trajectories(df):
     """Rows collected into trajectories, ordered by separation and frame-indexed.
 
@@ -236,13 +263,16 @@ def group_trajectories(df):
     ``row <position>`` -- absent grouping means one system per row, not one system holding
     everything.
 
+    Optional ``binding_motif`` and ``source_dataset`` values are promoted to a trajectory only
+    when every frame has the same nonblank scalar. Generic uploads with missing, partial, or
+    inconsistent metadata remain fully browsable but uncategorized.
+
     **Run ``add_derived_columns`` first.** Separations are read off the columns it writes,
     so grouping an unprocessed frame leaves every separation unavailable: frames keep their
     dataframe order and label themselves by system_id.
 
-    Returns ``[{"name", "frames"}]`` sorted by name, each frame carrying ``row_index``,
-    ``system_id``, ``frame_index``, ``separation``, ``separation_units`` and
-    ``separation_label``.
+    Uncategorised trajectories retain the historical alphabetical order. When at least one
+    trajectory is categorised, dataframe first appearance defines system/motif display order.
     """
     groups = {}
     for position, (_, row) in enumerate(df.iterrows()):
@@ -260,6 +290,11 @@ def group_trajectories(df):
     trajectories = []
     for name in sorted(groups):
         frames = groups[name]
+        metadata = {
+            "binding_motif": _unanimous_metadata(frames, "binding_motif"),
+            "source_dataset": _unanimous_metadata(frames, "source_dataset"),
+        }
+        first_row_index = min(frame["row_index"] for frame in frames)
         derived = derive_separations(frames)
         for frame, values in zip(frames, derived):
             frame.pop("_row")
@@ -279,8 +314,21 @@ def group_trajectories(df):
         for index, frame in enumerate(frames):
             frame["frame_index"] = index
 
-        trajectories.append({"name": name, "frames": frames})
+        trajectories.append(
+            {
+                "name": name,
+                "frames": frames,
+                "binding_motif": metadata["binding_motif"],
+                "source_dataset": metadata["source_dataset"],
+                # Private ordering aid; removed below before callers receive the trajectory.
+                "_first_row_index": first_row_index,
+            }
+        )
 
+    if any(trajectory["binding_motif"] for trajectory in trajectories):
+        trajectories.sort(key=lambda trajectory: trajectory["_first_row_index"])
+    for trajectory in trajectories:
+        trajectory.pop("_first_row_index")
     return trajectories
 
 

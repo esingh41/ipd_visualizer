@@ -37,6 +37,7 @@ def list_collections():
             "frame_count": manifest["frame_count"],
             "created_at": manifest["created_at"],
             "features": manifest["features"],
+            "binding_motifs": manifest.get("binding_motifs", []),
         }
         for manifest in system_serialization.list_collections()
     ]
@@ -56,11 +57,14 @@ def list_systems(upload_id):
         "upload_id": manifest["collection_id"],
         "display_name": manifest["display_name"],
         "features": manifest["features"],
+        "binding_motifs": manifest.get("binding_motifs", []),
         "systems": [
             {
                 "system_id": entry["name"],
                 "slug": _slug_of(entry),
                 "frame_count": entry["n_frames"],
+                "binding_motif": entry.get("binding_motif"),
+                "source_dataset": entry.get("source_dataset"),
             }
             for entry in manifest["systems"]
         ],
